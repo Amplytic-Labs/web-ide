@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 // Stage the nodine runtime from the installed npm package (@amplytic/nodine)
-// into vscode-web/nodine, then apply the worker-safety fix to supervisor.mjs
-// if the installed package still ships the broken one.
+// into the built web IDE, and bundle sdk.mjs from the package dist.
 //
 // The web IDE consumes nodine via npm (vscode/package.json), NOT a git clone:
 //   cd vscode && pnpm install
 //   node ../scripts/stage-nodine.mjs
 //
-// FIX (applied when needed): the ext host runs inside a Worker where `window`
-// is undefined; the diagnostics sink must be guarded. Remove once the
-// published package >= 0.4.1 includes it (check: grep 'const DIAG').
+// Requires @amplytic/nodine >= 0.4.1 (Worker-context support in the SDK:
+// checkEnvironment + baseURI resolution + guarded diagnostics sink — fixed
+// in the nodine package itself, so this script applies NO patches).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,11 +30,25 @@ const OUT_CANDIDATES = [
 ];
 const OUT = OUT_CANDIDATES.find(p => p && fs.existsSync(path.dirname(path.dirname(p))));
 
-if (!RUNTIME) {
-  console.error('nodine runtime not found — tried:\n' + CANDIDATES.join('\n'));
-  console.error('run: cd vscode && pnpm install');
+if (!RUNTIME || !OUT) {
+  if (!RUNTIME) console.error('nodine runtime not found — tried:\n' + PKG_CANDIDATES.join('\n'));
+  if (!OUT) console.error('stage output dir not found — tried:\n' + OUT_CANDIDATES.join('\n'));
+  console.error('run: cd vscode && pnpm install  (needs @amplytic/nodine >= 0.4.1)');
   process.exit(1);
 }
+
+// guard: refuse to stage a package that still needs the old worker patches
+const sup = fs.readFileSync(path.join(RUNTIME, 'supervisor.mjs'), 'utf8');
+if (/window\.__p2007 &&/.test(sup) || /window\.__p2007\.lastExit/.test(sup)) {
+  console.error('installed @amplytic/nodine predates Worker support (0.4.1). Upgrade the dependency.');
+  process.exit(1);
+}
+const env = fs.readFileSync(path.join(PKG, 'dist/environment.js'), 'utf8');
+if (!env.includes('inWorker')) {
+  console.error('installed @amplytic/nodine SDK lacks Worker-context support (0.4.1). Upgrade the dependency.');
+  process.exit(1);
+}
+
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 let n = 0, bytes = 0;
@@ -48,74 +61,10 @@ const copy = (src, dst) => {
 };
 copy(RUNTIME, OUT);
 
-// worker-safety fix for supervisor.mjs (no-op if already fixed upstream)
-const supPath = path.join(OUT, 'supervisor.mjs');
-let sup = fs.readFileSync(supPath, 'utf8');
-if (sup.includes('window.__p2007')) {
-  sup = sup
-    .replace(
-      /^/m,
-      `// Worker-safe diagnostics sink (patched by stage-nodine): window is\n` +
-      `// undefined inside Workers (e.g. the VS Code web extension host).\n` +
-      `const DIAG = (typeof window !== 'undefined' && window.__p2007) || undefined;\n\n`
-    )
-    .replace(/window\.__p2007 && window\.__p2007\.logs\.push/g, 'DIAG && DIAG.logs.push')
-    .replace(/window\.__p2007\.lastExit = code/g, 'if (DIAG) DIAG.lastExit = code')
-    .replace(/window\.__p2007 && \(window\.__p2007\.exitCode = code, window\.__p2007\.stopped = true\)/g,
-      'if (DIAG) { DIAG.exitCode = code; DIAG.stopped = true; }')
-    .replace(/if \(window\.__p2007\) if \(DIAG\) DIAG\.lastExit = code;/g, 'if (DIAG) DIAG.lastExit = code;');
-  fs.writeFileSync(supPath, sup);
-  console.log('applied worker-safety fix to supervisor.mjs (remove when @amplytic/nodine >= 0.4.1)');
-}
-
-// Worker-context fix for sdk.mjs (no-op if already fixed upstream):
-// Container.boot()'s environment check hard-requires window/document and
-// navigator.serviceWorker — true only on the MAIN thread. When the SDK runs
-// inside a Worker (the VS Code web extension host embeds it there), the
-// runtime itself works (crossOriginIsolated + SharedArrayBuffer + wasm
-// threads are all Worker-capable); only previewUrl's service worker is
-// unavailable. Relax exactly those two checks in Worker contexts.
-const sdkPath = path.join(OUT, 'sdk.mjs');
-if (fs.existsSync(sdkPath)) {
-  let sdk = fs.readFileSync(sdkPath, 'utf8');
-  if (sdk.includes('function checkEnvironment() {') && !sdk.includes('inWorkerGlobal')) {
-    sdk = sdk.replace(
-      'function checkEnvironment() {\n  const checks = [];',
-      'function checkEnvironment() {\n' +
-      '  // patched by stage-nodine: a Worker context (VS Code web ext host)\n' +
-      '  // has no window/document/navigator.serviceWorker, but CAN run the\n' +
-      '  // runtime (isolation + SAB + wasm threads are Worker-capable).\n' +
-      '  const inWorkerGlobal = typeof WorkerGlobalScope !== "undefined" && typeof importScripts !== "undefined" === false && typeof window === "undefined" && typeof self !== "undefined";\n' +
-      '  const checks = [];'
-    );
-    // browser-context check: ok in a worker too
-    sdk = sdk.replace(
-      'checks.push({\n    id: "browser-context",\n    ok: hasWindow && hasDocument,',
-      'checks.push({\n    id: "browser-context",\n    ok: (hasWindow && hasDocument) || inWorkerGlobal,'
-    );
-    // service-workers check: only previewUrl needs it; skip in workers
-    sdk = sdk.replace(
-      'checks.push({\n    id: "service-workers",\n    ok: "serviceWorker" in navigator,',
-      'checks.push({\n    id: "service-workers",\n    ok: inWorkerGlobal || "serviceWorker" in navigator,'
-    );
-    // cross-origin-isolated check reads `window.` — make it Worker-safe
-    sdk = sdk.replace(
-      'ok: window.crossOriginIsolated === true,',
-      'ok: (typeof window !== "undefined" ? window.crossOriginIsolated : self.crossOriginIsolated) === true,'
-    );
-    sdk = sdk.replace(
-      'new URL(runtimeUrl, document.baseURI)',
-      'new URL(runtimeUrl, (typeof document !== "undefined" ? document.baseURI : self.location.origin))'
-    );
-    fs.writeFileSync(sdkPath, sdk);
-    console.log('applied worker-context fix to sdk.mjs (remove when @amplytic/nodine ships worker support)');
-  }
-}
-
 // sdk.mjs: bundle the SDK entry from the installed package (the runtime/
 // dir ships without it — the SDK is a separate dist bundle)
 const sdkOut = path.join(OUT, 'sdk.mjs');
-if (!fs.existsSync(sdkOut) && PKG && fs.existsSync(path.join(PKG, 'dist/index.js'))) {
+if (PKG && fs.existsSync(path.join(PKG, 'dist/index.js'))) {
   const esbuildPath = [
     '/home/z/my-project/vscode/node_modules/.pnpm/esbuild@0.28.1/node_modules/esbuild/lib/main.js',
     '/home/z/my-project/vscode/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js',
@@ -127,21 +76,6 @@ if (!fs.existsSync(sdkOut) && PKG && fs.existsSync(path.join(PKG, 'dist/index.js
     platform: 'browser', format: 'esm', bundle: true, logLevel: 'warning',
   });
   console.log('bundled sdk.mjs from @amplytic/nodine/dist');
-  // re-apply the worker-context fix to the freshly bundled sdk
-  let fresh = fs.readFileSync(sdkOut, 'utf8');
-  fresh = fresh
-    .replace('function checkEnvironment() {\n  const checks = [];',
-      'function checkEnvironment() {\n' +
-      '  const inWorkerGlobal = typeof window === "undefined" && typeof self !== "undefined";\n' +
-      '  const checks = [];')
-    .replace('ok: hasWindow && hasDocument,', 'ok: (hasWindow && hasDocument) || inWorkerGlobal,')
-    .replace('ok: "serviceWorker" in navigator,', 'ok: inWorkerGlobal || "serviceWorker" in navigator,')
-    .replace('ok: window.crossOriginIsolated === true,',
-      'ok: (typeof window !== "undefined" ? window.crossOriginIsolated : self.crossOriginIsolated) === true,')
-    .replace('new URL(runtimeUrl, document.baseURI)',
-      'new URL(runtimeUrl, (typeof document !== "undefined" ? document.baseURI : self.location.origin))');
-  fs.writeFileSync(sdkOut, fresh);
-  console.log('applied worker-context fix to sdk.mjs');
 }
 
 console.log(`staged nodine runtime: ${n} files, ${(bytes / 1048576).toFixed(1)} MB -> ${OUT}`);

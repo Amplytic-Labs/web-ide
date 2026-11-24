@@ -1,6 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Amplytic Labs. All rights reserved. Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
+import * as vscode from 'vscode';
+
 /**
  * Nodine SDK types (subset of @amplytic/nodine used by this extension).
  * The SDK is bundled from the vendored source at build time; these types
@@ -97,15 +99,22 @@ export async function bootContainer(runtimeUrl: string, workdirName = 'project')
 			}
 			// resolve sdk.mjs next to the runtime URL. Worker-safe: extension-host
 			// workers may have a blob: base URL, so resolve against the origin.
-			let sdkUrl: string;
-			if (typeof document !== 'undefined') {
-				sdkUrl = new URL('./sdk.mjs', new URL(runtimeUrl, document.baseURI)).href;
-			} else {
-				const abs = new URL(runtimeUrl, self.location.origin).href;
-				sdkUrl = new URL('./sdk.mjs', abs).href;
+			// Resolve the runtime URL to an ABSOLUTE URL. In the ext-host worker
+			// neither document nor a usable self.location exists (the worker
+			// script is a blob:), so derive the app base from this extension's
+			// own URI — always served from the app origin in web builds.
+			const ext = vscode.extensions.getExtension('amplytic.webide-dev') ?? vscode.extensions.getExtension('webide-dev');
+			const extUri = ext?.extensionUri?.toString();
+			const baseUri = (typeof document !== 'undefined')
+				? document.baseURI
+				: (extUri ? extUri.replace(/\/+$/, '') + '/' : undefined);
+			if (!baseUri) {
+				throw new Error('Cannot resolve the app origin for the nodine runtime URL from this worker context.');
 			}
+			const absRuntimeUrl = new URL(runtimeUrl, baseUri).href;
+			const sdkUrl = new URL('./sdk.mjs', absRuntimeUrl).href;
 			const mod: NodineModule = await import(/* @vite-ignore */ sdkUrl);
-			const container = await mod.Container.boot({ runtimeUrl, coep: 'credentialless', workdirName });
+			const container = await mod.Container.boot({ runtimeUrl: absRuntimeUrl, coep: 'credentialless', workdirName });
 			currentContainer = container;
 			return container;
 		})().catch(err => {
