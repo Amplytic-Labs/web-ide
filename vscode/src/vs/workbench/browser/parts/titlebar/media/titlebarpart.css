@@ -320,8 +320,8 @@
 
 /* App Icon */
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {
-	/* nodine: full-width TEXT logo in the title bar (brand mark + wordmark) */
-	width: 132px;
+	/* nodine: text logo (mark + wordmark) in the title bar */
+	width: 92px;
 	height: 100%;
 	position: relative;
 	z-index: 2500;
@@ -330,16 +330,13 @@
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon:not(.codicon) {
+	/* transparent, exactly like the source SVG — only visible on dark titlebars,
+	   which is the default (dark) theme of this product */
 	background-image: url('../../../media/nodine-text-logo.svg');
 	background-repeat: no-repeat;
 	background-position: left center;
 	background-size: contain;
 	margin-left: 8px;
-	/* the wordmark is white — give it the Nodine brand chip so it reads on any titlebar theme */
-	background-color: #17171d;
-	border-radius: 4px;
-	margin-top: 4px;
-	margin-bottom: 4px;
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon.codicon {

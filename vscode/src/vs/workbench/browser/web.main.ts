@@ -531,8 +531,9 @@ export class BrowserMain extends Disposable {
 		const userDataStore = 'vscode-userdata-store';
 		const logsStore = 'vscode-logs-store';
 		const handlesStore = 'vscode-filehandles-store';
+		const tmpStore = 'vscode-tmp-store';
 		try {
-			indexedDB = await IndexedDB.create('vscode-web-db', 3, [userDataStore, logsStore, handlesStore]);
+			indexedDB = await IndexedDB.create('vscode-web-db', 4, [userDataStore, logsStore, handlesStore, tmpStore]);
 
 			// Close onWillShutdown
 			this.onWillShutdownDisposables.add(toDisposable(() => indexedDB?.close()));
@@ -566,8 +567,16 @@ export class BrowserMain extends Disposable {
 			fileService.registerProvider(Schemas.file, new HTMLFileSystemProvider(indexedDB, handlesStore, logService));
 		}
 
-		// In-memory
-		fileService.registerProvider(Schemas.tmp, new InMemoryFileSystemProvider());
+		// nodine: tmp: is IndexedDB-backed (not in-memory) so that folders
+		// imported via the webkitdirectory fallback survive the workspace
+		// reload that opening them triggers. Falls back to in-memory when
+		// IndexedDB is unavailable (private modes).
+		if (indexedDB) {
+			const tmpProvider = new IndexedDBFileSystemProvider(Schemas.tmp, indexedDB, tmpStore, true);
+			fileService.registerProvider(Schemas.tmp, tmpProvider);
+		} else {
+			fileService.registerProvider(Schemas.tmp, new InMemoryFileSystemProvider());
+		}
 	}
 
 	private registerDeveloperActions(provider: IndexedDBFileSystemProvider): void {
