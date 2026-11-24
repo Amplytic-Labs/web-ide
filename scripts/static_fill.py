@@ -32,7 +32,15 @@ workbench_web_configuration = {
     'enableWorkspaceTrust': True,
     'enabledExtensionProposedApi': [],  # must be an array (readonly ExtensionId[])
     'folderUri': None,
-    'workspaceUri': None,
+    # Boot straight into a persistent tmp: WORKSPACE (multi-root state).
+    # This is what makes folder switching LIVE: from WORKSPACE state
+    # updateWorkspaceFolders updates in place, whereas from EMPTY state the
+    # first addFolder forces createAndEnterWorkspace → full window reload,
+    # which would destroy the in-memory nodine container and its uploaded
+    # files. The workspace file lives in IndexedDB (tmp: provider), survives
+    # reloads, and is created eagerly by web.main.ts's isTemporaryWorkspace
+    # branch.
+    'workspaceUri': 'tmp:/nodine-workspace.workspace',
     'productConfiguration': {
         'embedderIdentifier': 'vscode-web-static',
     },

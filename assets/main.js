@@ -41,7 +41,12 @@ class WorkspaceProvider {
 			if (config.folderUri) {
 				workspace = { folderUri: URI.revive(config.folderUri) };
 			} else if (config.workspaceUri) {
-				workspace = { workspaceUri: URI.revive(config.workspaceUri) };
+				// URI.revive expects a serialized URI (URI.toJSON shape) — a
+				// plain "scheme:/path" string makes it validate the string as
+				// a scheme and throw. Accept both: strings go through parse.
+				workspace = { workspaceUri: typeof config.workspaceUri === 'string'
+					? URI.parse(config.workspaceUri)
+					: URI.revive(config.workspaceUri) };
 			}
 		}
 		return new WorkspaceProvider(workspace, payload);
@@ -193,6 +198,10 @@ class LocalStorageURLCallbackProvider {
 }
 
 (function () {
+	// The workbench is up (this module is loaded from workbench.js) — remove
+	// the branded loading screen before it flips to its error copy.
+	window.document.getElementById('vscode-startup-fallback')?.remove();
+
 	const configElement = window.document.getElementById('vscode-workbench-web-configuration');
 	const configElementAttribute = configElement ? configElement.getAttribute('data-settings') : undefined;
 	if (!configElement || !configElementAttribute) {

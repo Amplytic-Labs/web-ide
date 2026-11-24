@@ -72,6 +72,7 @@ export async function uploadFolder(
 		openLabel: 'Upload Folder',
 		title: 'Choose a local folder to upload into the dev environment',
 	});
+	console.log('[webide-dev] upload: picker returned', picked?.map(u => u.toString()));
 	if (!picked || picked.length === 0) { return; }
 
 	const root = picked[0];
@@ -86,12 +87,12 @@ export async function uploadFolder(
 			progress.report({ message: 'reading files…' });
 			const copied = await copyDir(root, folderName, writeFile, ensureDir,
 				msg => progress.report({ message: msg }));
-			await reveal(folderName);
 			if (copied === 0) {
 				vscode.window.showWarningMessage(`No files uploaded from ${folderName} (empty, or all filtered by ignore rules).`);
-			} else {
-				vscode.window.showInformationMessage(`Uploaded ${copied} files from ${folderName} into the dev environment.`);
+				return;
 			}
+			await reveal(folderName);
+			vscode.window.showInformationMessage(`Uploaded ${copied} files from ${folderName} — the dev terminal is booting at /${folderName}.`);
 		} catch (err) {
 			vscode.window.showErrorMessage(`Folder upload failed: ${err instanceof Error ? err.message : String(err)}`);
 		}

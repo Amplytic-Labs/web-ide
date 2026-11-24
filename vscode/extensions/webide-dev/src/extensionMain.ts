@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import { bootContainer, getContainer, isCrossOriginIsolated, type NodineContainer } from './nodine';
 import { NodineFileSystemProvider, openNodineWorkspace } from './fsProvider';
-import { createDevTerminal } from './terminal';
+import { createDevTerminal, focusDevTerminal } from './terminal';
 import { importFromGithub } from './githubImport';
 import { uploadFolder } from './folderUpload';
 
@@ -45,14 +45,25 @@ class RunOnceTerminal implements vscode.Pseudoterminal {
 	close(): void { /* nothing to clean up */ }
 }
 
+/** Where the uploaded / imported project lives inside the container. */
+export let projectCwd: string | null = null;
+
+export function setProjectCwd(p: string): void {
+	projectCwd = p;
+}
+
+export function getProjectCwd(): string | null {
+	return projectCwd;
+}
+
 export async function activate(_context: vscode.ExtensionContext): Promise<void> {
 	const config = vscode.workspace.getConfiguration('webide-dev');
 	const runtimeUrl = config.get<string>('runtimeUrl', '/nodine/supervisor.mjs');
 
 	// LAZY BOOT: nothing happens on startup. The runtime boots on the first
 	// command that needs it — Create Dev Terminal, Import from GitHub or
-	// Upload Folder. A fresh start shows the plain welcome page, no
-	// "untitled (nodine)" workspace, no boot toast.
+	// Upload Folder. A fresh start shows the plain welcome page, no boot
+	// toast.
 	let readyPromise: Promise<NodineContainer | null> | null = null;
 
 	const ensureRuntime = (): Promise<NodineContainer | null> => {
@@ -70,7 +81,25 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 					// added on demand (adding it from an empty workspace would
 					// reload the window and destroy the in-memory container).
 					const provider = new NodineFileSystemProvider(container);
-					_context.subscriptions.push(vscode.workspace.registerFileSystemProvider('nodine', provider, { isCaseSensitive: true }));
+						// Test hook (headless E2E): simulates Upload Folder's post-copy path
+		// without the native picker — writes a small project into the container
+		// and runs projectReady(). Not exposed in any menu; `_`-prefixed
+		// commands are hidden from the palette by VS Code convention. Reached
+		// through globalThis from the extension-host iframe.
+		const simulateUpload = async (folderName: string): Promise<string> => {
+			const fs = await getFs();
+			if (!fs) { return 'no-runtime'; }
+			await fs.ensureDir(folderName);
+			await fs.writeFile(`${folderName}/package.json`, new TextEncoder().encode(
+				JSON.stringify({ name: folderName, version: '1.0.0', scripts: { start: 'node index.js' } }, null, 2)));
+			await fs.writeFile(`${folderName}/index.js`, new TextEncoder().encode('console.log("hello from ' + folderName + '");\n'));
+			await projectReady(folderName);
+			return 'ok';
+		};
+		vscode.commands.registerCommand('webide-dev._simulateUpload', simulateUpload);
+		(globalThis as Record<string, unknown>).__webideDevTest = { simulateUpload };
+
+	_context.subscriptions.push(vscode.workspace.registerFileSystemProvider('nodine', provider, { isCaseSensitive: true }));
 					return container;
 				} catch (err) {
 					console.error('[webide-dev] runtime boot failed:', err);
@@ -84,26 +113,33 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 	};
 
 	// Adds the nodine: workspace folder exactly once, on demand (import /
-	// upload completion). Accepts the window reload this causes on web: at
-	// that point the files were written to the container and the user is
-	// done — the reloaded window opens the (fresh) nodine workspace.
+	// upload completion). The workbench starts in a persistent tmp: workspace
+	// (WORKSPACE state — see scripts/static_fill.py), so switching roots is a
+	// LIVE updateWorkspaceFolders: no reload, the in-memory container with the
+	// uploaded files survives.
 	const openNodineWorkspaceOnce = async (): Promise<void> => {
 		const existing = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'nodine');
 		if (existing) { return; }
 		await openNodineWorkspace(await ensureRuntime() as NodineContainer);
 	};
 
+	// Upload / GitHub import write the project at the CONTAINER ROOT
+	// (/<folderName>, not nested in the workdir), so after upload the
+	// workspace root IS the project — exactly like WebContainer's mount().
+	// The explorer maps nodine:/ → container /.
 	const getFs = async (): Promise<{ writeFile: (p: string, c: Uint8Array) => Promise<void>; ensureDir: (path: string) => Promise<void> } | null> => {
 		const container = await ensureRuntime();
 		if (!container) { return null; }
 		return {
+			// p is a project-relative path ("<folderName>/src/a.js"); write it
+			// at the container root: /<folderName>/src/a.js
 			writeFile: async (p, contents) => {
 				const dir = p.split('/').slice(0, -1).join('/');
-				if (dir) { await container.fs.mkdir(`${container.workdir}/${dir}`, { recursive: true }).catch(() => { }); }
-				await container.fs.writeFile(`${container.workdir}/${p}`, contents);
+				if (dir) { await container.fs.mkdir(`/${dir}`, { recursive: true }).catch(() => { }); }
+				await container.fs.writeFile(`/${p}`, contents);
 			},
 			ensureDir: async (p) => {
-				await container.fs.mkdir(`${container.workdir}/${p}`, { recursive: true }).catch(() => { });
+				await container.fs.mkdir(`/${p}`, { recursive: true }).catch(() => { });
 			},
 		};
 	};
@@ -134,6 +170,16 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		return { repoInput, tokenInput };
 	};
 
+	// The post-import / post-upload sequence: make the project the workspace
+	// root (live, no reload), auto-open the dev terminal booted INTO that
+	// folder, and reveal it in the explorer.
+	const projectReady = async (folderName: string): Promise<void> => {
+		setProjectCwd(`/${folderName}`);
+		await openNodineWorkspaceOnce();
+		await focusDevTerminal(_context);   // boots (if needed) + shows + cds
+		await reveal(folderName);
+	};
+
 	_context.subscriptions.push(
 		vscode.commands.registerCommand('webide-dev.createTerminal', () => {
 			createDevTerminal(_context);
@@ -149,11 +195,7 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 				vscode.window.showErrorMessage('Dev environment is not running (needs cross-origin isolated host with the nodine runtime).');
 				return;
 			}
-			await importFromGithub(inputs, fs.writeFile, fs.ensureDir, async (name) => {
-				// reveal: switch to the nodine workspace (accepts one reload)
-				await openNodineWorkspaceOnce();
-				await reveal(name);
-			});
+			await importFromGithub(inputs, fs.writeFile, fs.ensureDir, projectReady);
 		}),
 
 		vscode.commands.registerCommand('webide-dev.uploadFolder', async () => {
@@ -162,10 +204,7 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 				vscode.window.showErrorMessage('Dev environment is not running (needs cross-origin isolated host with the nodine runtime).');
 				return;
 			}
-			await uploadFolder(fs.writeFile, fs.ensureDir, async (name) => {
-				await openNodineWorkspaceOnce();
-				await reveal(name);
-			});
+			await uploadFolder(fs.writeFile, fs.ensureDir, projectReady);
 		}),
 
 		vscode.commands.registerCommand('webide-dev.runFile', async (uri?: vscode.Uri) => {

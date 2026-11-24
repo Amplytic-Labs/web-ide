@@ -6,25 +6,24 @@ import type { NodineContainer } from './nodine';
 
 /**
  * A read/write FileSystemProvider over the nodine container's filesystem,
- * rooted at the container workdir. Registered for the `nodine` scheme, so
+ * rooted at the CONTAINER ROOT. Registered for the `nodine` scheme, so
  * Explorer, editor tabs, search, and the terminal all share one real FS —
  * edits in the editor are visible to `node` processes immediately.
  *
- * URIs: nodine:///relative/path  →  /home/user/project/relative/path
+ * URIs: nodine:///folderName/…  →  /folderName/… in the container
+ * (uploaded / imported projects land at /<folderName>, so after an upload
+ * the workspace root IS the project — WebContainer-style.)
  */
 
 const SCHEME = 'nodine';
 
 export class NodineFileSystemProvider implements vscode.FileSystemProvider {
-	private readonly root: string;
 
-	constructor(private readonly container: NodineContainer) {
-		this.root = container.workdir;
-	}
+	constructor(private readonly container: NodineContainer) { }
 
 	private toContainerPath(uri: vscode.Uri): string {
 		const rel = uri.path.replace(/^\/+/, '');
-		return rel ? `${this.root}/${rel}` : this.root;
+		return rel ? `/${rel}` : '/';
 	}
 
 	stat(uri: vscode.Uri): vscode.FileStat | Thenable<vscode.FileStat> {
@@ -150,7 +149,7 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 		let watcher: { close(): void } | undefined;
 		try {
 			watcher = this.container.fs.watch(p, (_event, filename) => {
-				const rel = filename.startsWith(this.root) ? filename.slice(this.root.length) : `/${filename}`;
+				const rel = filename.startsWith('/') ? filename : `/${filename}`;
 				this._fireDidChange(vscode.Uri.joinPath(uri, rel.replace(/^\/+/, '')));
 			});
 		} catch {
@@ -176,16 +175,21 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 	get scheme(): string { return SCHEME; }
 }
 
-/** Open the container workdir as the workspace folder. */
+/**
+ * Make the container root the (only) workspace folder. The workbench boots
+ * inside a persistent tmp: workspace (WORKSPACE state), so this is a LIVE
+ * updateWorkspaceFolders — no window reload, the in-memory container (and
+ * its just-uploaded files) survives.
+ */
 export async function openNodineWorkspace(_container: NodineContainer): Promise<void> {
 	const folderUri = vscode.Uri.parse(`${SCHEME}:/`);
-	// add or switch workspace folder
-	const existing = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === SCHEME);
-	if (!existing) {
-		if (vscode.workspace.workspaceFolders?.length) {
-			vscode.workspace.updateWorkspaceFolders(1, 0, { uri: folderUri, name: 'project (nodine)' });
-		} else {
-			vscode.workspace.updateWorkspaceFolders(0, vscode.workspace.workspaceFolders?.length ?? 0, { uri: folderUri, name: 'project (nodine)' });
-		}
+	const existing = vscode.workspace.workspaceFolders;
+	const already = existing?.some(f => f.uri.scheme === SCHEME);
+	if (already) { return; }
+	// swap every current folder for the nodine root, in place
+	const ok = vscode.workspace.updateWorkspaceFolders(
+		0, existing?.length ?? 0, { uri: folderUri, name: 'nodine' });
+	if (!ok) {
+		console.error('[webide-dev] updateWorkspaceFolders returned false (workspace change rejected)');
 	}
 }

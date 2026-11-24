@@ -12,7 +12,7 @@ import { memoize } from '../../../../base/common/decorators.js';
 import { HTMLFileSystemProvider } from '../../../../platform/files/browser/htmlFileSystemProvider.js';
 import { localize } from '../../../../nls.js';
 import { getMediaOrTextMime } from '../../../../base/common/mime.js';
-import { basename } from '../../../../base/common/resources.js';
+import { basename, dirname } from '../../../../base/common/resources.js';
 import { getActiveWindow, triggerDownload, triggerUpload } from '../../../../base/browser/dom.js';
 import Severity from '../../../../base/common/severity.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
@@ -135,14 +135,37 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 			input.multiple = true;
 			(input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
 			input.style.display = 'none';
-			input.addEventListener('change', () => {
-				resolve(Array.from(input.files ?? []));
+			let settled = false;
+			const settle = (value: File[] | undefined): void => {
+				if (settled) { return; }
+				settled = true;
+				resolve(value);
 				input.remove();
+			};
+			input.addEventListener('change', () => {
+				// change means files were chosen — wins over any cancel path
+				settle(Array.from(input.files ?? []));
 			});
-			// user cancelled: no change event fires; resolve on the next window focus
-			activeWindow.addEventListener('focus', () => setTimeout(() => {
-				if (!input.files || input.files.length === 0) { resolve(undefined); input.remove(); }
-			}, 1000), { once: true });
+			input.addEventListener('cancel', () => settle(undefined));
+			// user cancelled without a change/cancel event (e.g. closed the
+			// picker): detect via focus ONLY while the input is still live and
+			// no files are present. Re-check for a grace period so a slow
+			// change event (large folders) is not lost.
+			const onFocusCheck = (): void => {
+				setTimeout(() => {
+					if (!settled && input.isConnected && (!input.files || input.files.length === 0)) {
+						// one more grace period: change may still be in flight
+						setTimeout(() => {
+							if (!settled && input.isConnected && (!input.files || input.files.length === 0)) {
+								settle(undefined);
+							}
+						}, 1500);
+					}
+				}, 500);
+			};
+			activeWindow.addEventListener('focus', onFocusCheck);
+			const cleanup = (): void => activeWindow.removeEventListener('focus', onFocusCheck);
+			input.addEventListener('change', cleanup, { once: true });
 			activeWindow.document.body.appendChild(input);
 			input.click();
 		});
@@ -166,7 +189,7 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 				const rel = relPath(file).split('/').slice(1).join('/') || file.name;
 				if (!rel || ignored(rel) || file.size > 512 * 1024) { continue; }
 				const target = URI.joinPath(root, rel);
-				await ensureFolder(URI.dirname(target));
+				await ensureFolder(dirname(target));
 				await this.fileService.createFile(target, VSBuffer.wrap(new Uint8Array(await file.arrayBuffer())), { overwrite: true });
 				imported++;
 			}

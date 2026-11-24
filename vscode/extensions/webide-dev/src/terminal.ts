@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 import * as vscode from 'vscode';
 import { bootContainer, type NodineContainer, type ContainerProcess } from './nodine';
+import { getProjectCwd } from './extensionMain';
 
 /**
  * A VS Code pseudoterminal backed by the nodine runtime.
@@ -25,8 +26,22 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	private inputWriter: WritableStreamDefaultWriter<string> | null = null;
 	private buffer = '';
 	private running = false;
+	/** cwd for spawned commands — the project folder once one is uploaded. */
+	private cwd: string | null = null;
 
 	constructor(private readonly runtimeUrl: string) { }
+
+	/** Point the shell at a project folder (e.g. "/my-app"). */
+	cd(path: string): void {
+		this.cwd = path;
+		this.writeEmitter.fire(`\x1b[90mcd ${path}\x1b[0m\r\n`);
+		this.prompt();
+	}
+
+	/** Absolute directory commands run in: project folder if set, else workdir. */
+	private resolveCwd(container: NodineContainer): string {
+		return this.cwd ?? container.workdir;
+	}
 
 	async open(_initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
 		this.writeEmitter.fire('Booting dev environment (nodine: real Node.js in your browser)…\r\n');
@@ -42,7 +57,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		}
 		const version = await this.nodeVersion();
 		console.log('[webide-dev] terminal: node version =', version);
-		this.writeEmitter.fire(`\x1b[32mready\x1b[0m — Node.js ${version} dev environment in ${this.container.workdir}\r\n`);
+		this.writeEmitter.fire(`\x1b[32mready\x1b[0m — Node.js ${version} dev environment in ${this.resolveCwd(this.container)}\r\n`);
 		this.writeEmitter.fire('Line-based shell: type JS to evaluate, or run `npm <cmd>`, `node <file>`.\r\n\r\n');
 		this.prompt();
 	}
@@ -83,7 +98,22 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	}
 
 	private prompt(): void {
-		this.writeEmitter.fire(`\x1b[36mnode>\x1b[0m `);
+		const where = this.cwd ?? (this.container ? this.resolveCwd(this.container) : '');
+		this.writeEmitter.fire(`\x1b[36m${where || 'node'}>\x1b[0m `);
+	}
+
+	/** `cd <dir>` builtin: resolve relative to the current cwd and switch. */
+	private changeDir(arg: string | undefined): void {
+		if (!this.container) { return; }
+		const base = this.resolveCwd(this.container);
+		if (!arg || arg === '~') {
+			this.cwd = this.container.workdir;
+		} else if (arg.startsWith('/')) {
+			this.cwd = arg.replace(/\/+$/, '') || '/';
+		} else {
+			this.cwd = `${base}/${arg}`.replace(/\/+$/, '');
+		}
+		this.prompt();
 	}
 
 	handleInput(data: string): void {
@@ -135,6 +165,15 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			this.prompt();
 			return;
 		}
+		if (argv[0] === 'cd') {
+			this.changeDir(argv[1]);
+			return;
+		}
+		if (argv[0] === 'pwd') {
+			this.writeEmitter.fire(`${this.resolveCwd(container)}\r\n`);
+			this.prompt();
+			return;
+		}
 		if (argv[0] === 'exit') {
 			this.closeEmitter.fire(0);
 			return;
@@ -150,7 +189,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 					// `node file.js …` runs the file; bare JS goes through -e
 					if (argv.length > 1 && !argv[1].startsWith('-')) {
 						proc = await container.spawn('node', argv.slice(1), {
-							cwd: container.workdir,
+							cwd: this.resolveCwd(container),
 							env: { ...container.baseEnv },
 						});
 					} else {
@@ -158,25 +197,25 @@ class NodineTerminal implements vscode.Pseudoterminal {
 						const code = argv.slice(1).join(' ');
 						if (!code) { this.prompt(); this.running = false; return; }
 						proc = await container.spawn('node', ['-e', evalCode(code)], {
-							cwd: container.workdir,
+							cwd: this.resolveCwd(container),
 							env: { ...container.baseEnv },
 						});
 					}
 				} else if (argv[0] === 'npm' || argv[0] === 'npx') {
 					proc = await container.spawn(argv[0], argv.slice(1), {
-						cwd: container.workdir,
+						cwd: this.resolveCwd(container),
 						env: { ...container.baseEnv, npm_config_progress: 'false', npm_config_loglevel: 'info' },
 					});
 				} else if (argv[0] === 'ls' || argv[0] === 'cat' || argv[0] === 'pwd' || argv[0] === 'mkdir' || argv[0] === 'grep' || argv[0] === 'wc' || argv[0] === 'head' || argv[0] === 'sh') {
 					// nodine coreutils are real /usr/bin programs
 					proc = await container.spawn(argv[0], argv.slice(1), {
-						cwd: container.workdir,
+						cwd: this.resolveCwd(container),
 						env: { ...container.baseEnv },
 					});
 				} else {
 					// treat unknown commands as JS to evaluate (shell-ish convenience)
 					proc = await container.spawn('node', ['-e', evalCode(line)], {
-						cwd: container.workdir,
+						cwd: this.resolveCwd(container),
 						env: { ...container.baseEnv },
 					});
 				}
@@ -262,6 +301,38 @@ export function createDevTerminal(context: vscode.ExtensionContext): vscode.Term
 		pty,
 		iconPath: new vscode.ThemeIcon('terminal'),
 	});
+	context.subscriptions.push(terminal);
+	terminal.show();
+	return terminal;
+}
+
+/**
+ * The one dev terminal for this window. `focusDevTerminal` after an upload /
+ * import: reuses the open terminal (cd'ing it into the project) or boots a
+ * fresh one — the boot progress is visible in the terminal itself, so the
+ * user never stares at a silent workbench.
+ */
+let devTerminal: vscode.Terminal | null = null;
+let devPty: NodineTerminal | null = null;
+
+export function focusDevTerminal(context: vscode.ExtensionContext): vscode.Terminal {
+	if (devTerminal && devTerminal.exitStatus === undefined) {
+		if (devPty) { devPty.cd(getProjectCwd() ?? ''); }
+		devTerminal.show();
+		return devTerminal;
+	}
+	const config = vscode.workspace.getConfiguration('webide-dev');
+	const runtimeUrl = config.get<string>('runtimeUrl', '/nodine/supervisor.mjs');
+	const pty = new NodineTerminal(runtimeUrl);
+	// if a project was uploaded before this boot, start inside it
+	pty.cd(getProjectCwd() ?? '');
+	const terminal = vscode.window.createTerminal({
+		name: 'node (nodine)',
+		pty,
+		iconPath: new vscode.ThemeIcon('terminal'),
+	});
+	devTerminal = terminal;
+	devPty = pty;
 	context.subscriptions.push(terminal);
 	terminal.show();
 	return terminal;
