@@ -1,0 +1,79 @@
+{
+  "name": "webide-dev",
+  "displayName": "Web IDE Dev Environment (Nodine)",
+  "description": "Real Node.js dev environment in the browser: nodine runtime terminal, import from GitHub, upload local folder.",
+  "publisher": "amplytic",
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": true,
+      "description": "Runs entirely in the browser"
+    },
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "browser": "./dist/browser/extensionMain",
+  "contributes": {
+    "commands": [
+      {
+        "command": "webide-dev.createTerminal",
+        "title": "Create Dev Terminal",
+        "category": "Web IDE"
+      },
+      {
+        "command": "webide-dev.importGithub",
+        "title": "Import from GitHub...",
+        "category": "Web IDE"
+      },
+      {
+        "command": "webide-dev.uploadFolder",
+        "title": "Upload Local Folder...",
+        "category": "Web IDE"
+      },
+      {
+        "command": "webide-dev.runFile",
+        "title": "Run Current File with Node",
+        "category": "Web IDE"
+      },
+      {
+        "command": "webide-dev.previewPort",
+        "title": "Open Preview Port...",
+        "category": "Web IDE"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "webide-dev.runFile",
+          "group": "webide@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Web IDE Dev",
+      "properties": {
+        "webide-dev.runtimeUrl": {
+          "type": "string",
+          "default": "/nodine/supervisor.mjs",
+          "description": "URL of the nodine runtime bundle (supervisor.mjs)"
+        },
+        "webide-dev.githubMaxFileKb": {
+          "type": "number",
+          "default": 512,
+          "description": "Max file size (KB) when importing from GitHub"
+        }
+      }
+    }
+  }
+}

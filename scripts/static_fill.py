@@ -103,7 +103,32 @@ def main():
         manifest_path.write_text(json.dumps(m, indent=2))
         print('fixed manifest.json icon paths')
 
+    # Install the browser shell shim (the build wipes out/browser/)
+    shim_src = Path('/home/z/my-project/web-ide-repo/assets/main.js')
+    shim_dst = SITE / 'out/browser/esm/main.js'
+    shim_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(shim_src, shim_dst)
+    print(f'installed browser shell shim → {shim_dst}')
+
+    # Stage the nodine runtime + SDK (the build wipes /nodine too)
+    nodine_dir = SITE / 'nodine'
+    if not (nodine_dir / 'supervisor.mjs').exists():
+        import subprocess
+        subprocess.run(['node', 'scripts/stage-runtime.mjs', str(nodine_dir)],
+                       cwd='/home/z/my-project/nodine', check=True, capture_output=True)
+        subprocess.run(['node', '-e', STAGE_SDK_SCRIPT], check=True)
+        print('staged nodine runtime + sdk.mjs')
+
     print('done')
+
+STAGE_SDK_SCRIPT = """
+const esbuild = require('/home/z/my-project/vscode/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild');
+esbuild.build({
+  entryPoints: ['/home/z/my-project/nodine/dist/index.js'],
+  outfile: '/home/z/my-project/vscode-web/nodine/sdk.mjs',
+  platform: 'browser', format: 'esm', bundle: true, logLevel: 'warning',
+}).then(() => console.log('sdk.mjs staged'));
+"""
 
 if __name__ == '__main__':
     main()
