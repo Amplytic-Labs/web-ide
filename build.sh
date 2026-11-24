@@ -1,9 +1,9 @@
 # Build the web-only VS Code site and refresh this repo's artifacts
-# Usage: bash build.sh   (run inside web-ide-repo; expects ../vscode to be the patched clone)
+# Usage: bash build.sh   (run inside web-ide-repo; source is in ./vscode)
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-VSCODE_DIR="${VSCODE_DIR:-$REPO_DIR/../vscode}"
+VSCODE_DIR="${VSCODE_DIR:-$REPO_DIR/vscode}"
 
 cd "$VSCODE_DIR"
 
@@ -19,4 +19,8 @@ VSCODE_WEB_NO_SOURCEMAPS=1 \
 
 # fill the workbench HTML into a serverless index.html
 python3 "$REPO_DIR/scripts/static_fill.py"
-echo "done → $VSCODE_DIR/../vscode-web"
+
+# Nodine branding: favicon + PWA icons + manifest from assets/Nodine-logo.*
+python3 "$REPO_DIR/scripts/make_nodine_icons.py"
+
+echo "done → $REPO_DIR/vscode-web"

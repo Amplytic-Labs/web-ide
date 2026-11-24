@@ -1,0 +1,7 @@
+src/**
+node_modules/**
+dist-sourcemaps/**
+tsconfig.json
+tsconfig.browser.json
+esbuild.mts
+esbuild.browser.mts

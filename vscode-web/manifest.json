@@ -1,6 +1,6 @@
 {
-  "name": "Code - OSS",
-  "short_name": "Code- OSS",
+  "name": "Nodine Web IDE",
+  "short_name": "Nodine IDE",
   "start_url": "/",
   "lang": "en-US",
   "display": "standalone",
@@ -18,5 +18,6 @@
       "type": "image/png",
       "sizes": "512x512"
     }
-  ]
+  ],
+  "description": "Real VS Code in the browser with the Nodine dev environment (Node.js in-web)"
 }
