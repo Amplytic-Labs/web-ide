@@ -1,5 +1,4 @@
-node_modules/
-vscode/
-vscode-web/
 *.log
 .env
+node_modules/
+vscode/
