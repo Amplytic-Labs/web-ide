@@ -72,6 +72,11 @@
           "type": "number",
           "default": 512,
           "description": "Max file size (KB) when importing from GitHub"
+        },
+        "webide-dev.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional GitHub PAT (raises rate limits, enables private repos)"
         }
       }
     }

@@ -108340,6 +108340,11 @@ if (self.Worker) {
     } else if (/^vscode-remote:/i.test(stringUrl.toString())) {
       throw new Error(`Creating workers from remote extensions is currently not supported.`);
     }
+    options2 = options2 || {};
+    if (options2.type === 'module') {
+      options2.name = `${name} -> ${options2.name || basename(stringUrl.toString())}`;
+      return new _Worker(stringUrl, options2);
+    }
     const bootstrapFnSource = (function bootstrapFn(workerUrl) {
       function asWorkerBrowserUrl(url) {
         if (typeof url === "string" || url instanceof URL) {
@@ -108366,7 +108371,6 @@ if (self.Worker) {
       nativeImportScripts(workerUrl);
     }).toString();
     const js = `(${bootstrapFnSource}('${stringUrl}'))`;
-    options2 = options2 || {};
     options2.name = `${name} -> ${options2.name || basename(stringUrl.toString())}`;
     const blob = new Blob([js], { type: "application/javascript" });
     const blobUrl = URL.createObjectURL(blob);

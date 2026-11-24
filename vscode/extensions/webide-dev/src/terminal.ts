@@ -140,43 +140,46 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			return;
 		}
 
-		this.running = true;
-		try {
-			let proc: ContainerProcess;
-			if (argv[0] === 'node') {
-				// `node file.js …` runs the file; bare JS goes through -e
-				if (argv.length > 1 && !argv[1].startsWith('-')) {
-					proc = await container.spawn('node', argv.slice(1), {
+			this.running = true;
+			try {
+				let proc: ContainerProcess;
+				// REPL-like evaluation: wrap code so the completion value prints
+				// (node -e alone swallows it; `40+2` should show 42 like a REPL)
+				const evalCode = (code: string) => `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
+				if (argv[0] === 'node') {
+					// `node file.js …` runs the file; bare JS goes through -e
+					if (argv.length > 1 && !argv[1].startsWith('-')) {
+						proc = await container.spawn('node', argv.slice(1), {
+							cwd: container.workdir,
+							env: { ...container.baseEnv },
+						});
+					} else {
+						// evaluate remaining args as code: `node console.log(1)` → node -e
+						const code = argv.slice(1).join(' ');
+						if (!code) { this.prompt(); this.running = false; return; }
+						proc = await container.spawn('node', ['-e', evalCode(code)], {
+							cwd: container.workdir,
+							env: { ...container.baseEnv },
+						});
+					}
+				} else if (argv[0] === 'npm' || argv[0] === 'npx') {
+					proc = await container.spawn(argv[0], argv.slice(1), {
+						cwd: container.workdir,
+						env: { ...container.baseEnv, npm_config_progress: 'false', npm_config_loglevel: 'info' },
+					});
+				} else if (argv[0] === 'ls' || argv[0] === 'cat' || argv[0] === 'pwd' || argv[0] === 'mkdir' || argv[0] === 'grep' || argv[0] === 'wc' || argv[0] === 'head' || argv[0] === 'sh') {
+					// nodine coreutils are real /usr/bin programs
+					proc = await container.spawn(argv[0], argv.slice(1), {
 						cwd: container.workdir,
 						env: { ...container.baseEnv },
 					});
 				} else {
-					// evaluate remaining args as code: `node console.log(1)` → node -e
-					const code = argv.slice(1).join(' ');
-					if (!code) { this.prompt(); this.running = false; return; }
-					proc = await container.spawn('node', ['-e', code], {
+					// treat unknown commands as JS to evaluate (shell-ish convenience)
+					proc = await container.spawn('node', ['-e', evalCode(line)], {
 						cwd: container.workdir,
 						env: { ...container.baseEnv },
 					});
 				}
-			} else if (argv[0] === 'npm' || argv[0] === 'npx') {
-				proc = await container.spawn(argv[0], argv.slice(1), {
-					cwd: container.workdir,
-					env: { ...container.baseEnv, npm_config_progress: 'false', npm_config_loglevel: 'info' },
-				});
-			} else if (argv[0] === 'ls' || argv[0] === 'cat' || argv[0] === 'pwd' || argv[0] === 'mkdir' || argv[0] === 'grep' || argv[0] === 'wc' || argv[0] === 'head' || argv[0] === 'sh') {
-				// nodine coreutils are real /usr/bin programs
-				proc = await container.spawn(argv[0], argv.slice(1), {
-					cwd: container.workdir,
-					env: { ...container.baseEnv },
-				});
-			} else {
-				// treat unknown commands as JS to evaluate (shell-ish convenience)
-				proc = await container.spawn('node', ['-e', line], {
-					cwd: container.workdir,
-					env: { ...container.baseEnv },
-				});
-			}
 
 			this.current = proc;
 			this.inputWriter = proc.input ? proc.input.getWriter() : null;

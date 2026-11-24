@@ -4,10 +4,17 @@
 import * as vscode from 'vscode';
 
 /**
- * Upload a local folder into the nodine workspace:
- * a hidden <input type="file" webkitdirectory> lets the user pick a folder;
- * files are filtered (bolt.diy-style ignore rules) and written into the
- * container filesystem via the nodine FS provider.
+ * Upload a local folder into the nodine workspace.
+ *
+ * Web extensions run in the extension host WORKER, where `document` is not
+ * available — a hidden <input webkitdirectory> cannot be created there. The
+ * web-native flow is:
+ *  1. vscode.window.showOpenDialog({ canSelectFolders: true }) — the main
+ *     thread opens the browser's File System Access folder picker.
+ *  2. Read the picked tree through vscode.workspace.fs (the built-in web
+ *     'file' provider owns the directory handle on the main thread).
+ *  3. Copy every file into the nodine container (bolt.diy-style ignore
+ *     rules and size caps).
  */
 
 const IGNORE_DIRS = new Set([
@@ -17,24 +24,40 @@ const IGNORE_DIRS = new Set([
 
 const MAX_FILE_KB = 512;
 
-function pickFolder(): Promise<File[]> {
-	return new Promise(resolve => {
-		const input = document.createElement('input');
-		input.type = 'file';
-		input.multiple = true;
-		(input as any).webkitdirectory = true;
-		input.style.display = 'none';
-		input.addEventListener('change', () => {
-			resolve(Array.from(input.files ?? []));
-			input.remove();
-		});
-		// if the user cancels the picker the input never fires; also resolve on cancel
-		window.addEventListener('focus', () => setTimeout(() => {
-			if (!input.files || input.files.length === 0) { resolve([]); input.remove(); }
-		}, 1000), { once: true });
-		document.body.appendChild(input);
-		input.click();
-	});
+async function copyDir(
+	src: vscode.Uri,
+	destPath: string,
+	writeFile: (path: string, contents: Uint8Array) => Promise<void>,
+	ensureDir: (path: string) => Promise<void>,
+	onProgress: (msg: string) => void,
+): Promise<number> {
+	let copied = 0;
+	let entries: [string, vscode.FileType][];
+	try {
+		entries = await vscode.workspace.fs.readDirectory(src);
+	} catch {
+		return 0;
+	}
+	await ensureDir(destPath);
+	for (const [name, type] of entries) {
+		if (type === vscode.FileType.Directory) {
+			if (IGNORE_DIRS.has(name)) { continue; }
+			copied += await copyDir(vscode.Uri.joinPath(src, name), `${destPath}/${name}`, writeFile, ensureDir, onProgress);
+		} else if (type === vscode.FileType.File) {
+			if (name.endsWith('.map') || name === '.DS_Store') { continue; }
+			try {
+				const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(src, name));
+				if (stat.size > MAX_FILE_KB * 1024) { continue; }
+				const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(src, name));
+				await writeFile(`${destPath}/${name}`, bytes);
+				copied++;
+				if (copied % 10 === 0) { onProgress(`${copied} files…`); }
+			} catch (err) {
+				console.warn(`[webide-dev] upload: failed to read ${name}:`, err);
+			}
+		}
+	}
+	return copied;
 }
 
 export async function uploadFolder(
@@ -42,47 +65,35 @@ export async function uploadFolder(
 	ensureDir: (path: string) => Promise<void>,
 	reveal: (folderName: string) => Promise<void>,
 ): Promise<void> {
-	const files = await pickFolder();
-	if (files.length === 0) { return; }
-
-	// folder name comes from the first file's webkitRelativePath
-	const rootName = (files[0] as any).webkitRelativePath?.split('/')[0] || 'uploaded-folder';
-	const relPath = (f: File) => ((f as any).webkitRelativePath || f.name).split('/').slice(1).join('/');
-
-	const valid = files.filter((f: File) => {
-		const p = relPath(f);
-		if (!p) { return false; }
-		return !p.split('/').some((seg: string) => IGNORE_DIRS.has(seg));
+	const picked = await vscode.window.showOpenDialog({
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: false,
+		openLabel: 'Upload Folder',
+		title: 'Choose a local folder to upload into the dev environment',
 	});
+	if (!picked || picked.length === 0) { return; }
 
-	if (valid.length === 0) {
-		vscode.window.showWarningMessage('No importable files found (everything was filtered out).');
-		return;
-	}
+	const root = picked[0];
+	const folderName = root.path.split('/').filter(Boolean).pop() || 'uploaded-folder';
 
 	await vscode.window.withProgress({
 		location: vscode.ProgressLocation.Notification,
-		title: `Uploading ${rootName}`,
-		cancellable: true,
-	}, async (progress: vscode.Progress<{ message?: string }>, token: vscode.CancellationToken) => {
-		const dirs = new Set<string>();
-		let uploaded = 0, skipped = 0;
-		for (const file of valid) {
-			if (token.isCancellationRequested) { break; }
-			const rel = relPath(file);
-			if (file.size > MAX_FILE_KB * 1024) { skipped++; continue; }
-
-			const dir = rel.split('/').slice(0, -1).join('/');
-			if (dir && !dirs.has(dir)) {
-				await ensureDir(dir);
-				dirs.add(dir);
+		title: `Uploading ${folderName}`,
+		cancellable: false,
+	}, async progress => {
+		try {
+			progress.report({ message: 'reading files…' });
+			const copied = await copyDir(root, folderName, writeFile, ensureDir,
+				msg => progress.report({ message: msg }));
+			await reveal(folderName);
+			if (copied === 0) {
+				vscode.window.showWarningMessage(`No files uploaded from ${folderName} (empty, or all filtered by ignore rules).`);
+			} else {
+				vscode.window.showInformationMessage(`Uploaded ${copied} files from ${folderName} into the dev environment.`);
 			}
-			const buf = new Uint8Array(await file.arrayBuffer());
-			await writeFile(rel, buf);
-			uploaded++;
-			if (uploaded % 25 === 0) { progress.report({ message: `${uploaded}/${valid.length} files` }); }
+		} catch (err) {
+			vscode.window.showErrorMessage(`Folder upload failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		await reveal(rootName);
-		vscode.window.showInformationMessage(`Uploaded ${uploaded} files${skipped ? ` (${skipped} skipped: oversized)` : ''} to the workspace.`);
 	});
 }

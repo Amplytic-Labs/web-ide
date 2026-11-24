@@ -148,3 +148,58 @@ index dfa7a76a..80e6ab8d 100644
  	"defaultChatAgent": {
  		"extensionId": "GitHub.copilot",
  		"chatExtensionId": "GitHub.copilot-chat",
+diff --git a/src/vs/workbench/api/worker/extensionHostWorker.ts b/src/vs/workbench/api/worker/extensionHostWorker.ts
+index 7df83c7f..3a2e50c8 100644
+--- a/src/vs/workbench/api/worker/extensionHostWorker.ts
++++ b/src/vs/workbench/api/worker/extensionHostWorker.ts
+@@ -103,16 +103,28 @@ if ((<any>self).Worker) {
+ 	// make sure new Worker(...) always uses blob: (to maintain current origin)
+ 	// eslint-disable-next-line local/code-no-any-casts
+ 	const _Worker = (<any>self).Worker;
+-	// eslint-disable-next-line local/code-no-any-casts
+-	Worker = <any>function (stringUrl: string | URL, options?: WorkerOptions) {
+-		if (/^file:/i.test(stringUrl.toString())) {
+-			stringUrl = FileAccess.uriToBrowserUri(URI.parse(stringUrl.toString())).toString(true);
+-		} else if (/^vscode-remote:/i.test(stringUrl.toString())) {
+-			// Supporting transformation of vscode-remote URIs requires an async call to the main thread,
+-			// but we cannot do this call from within the embedded Worker, and the only way out would be
+-			// to use templating instead of a function in the web api (`resourceUriProvider`)
+-			throw new Error(`Creating workers from remote extensions is currently not supported.`);
+-		}
++		// eslint-disable-next-line local/code-no-any-casts
++		Worker = <any>function (stringUrl: string | URL, options?: WorkerOptions) {
++			if (/^file:/i.test(stringUrl.toString())) {
++				stringUrl = FileAccess.uriToBrowserUri(URI.parse(stringUrl.toString())).toString(true);
++			} else if (/^vscode-remote:/i.test(stringUrl.toString())) {
++				// Supporting transformation of vscode-remote URIs requires an async call to the main thread,
++				// but we cannot do this call from within the embedded Worker, and the only way out would be
++				// to use templating instead of a function in the web api (`resourceUriProvider`)
++				throw new Error(`Creating workers from remote extensions is currently not supported.`);
++			}
++
++			options = options || {};
++			if (options.type === 'module') {
++				// Module workers cannot use the importScripts()-based bootstrap below:
++				// importScripts() throws inside a module worker, which would kill the
++				// worker before the extension's code ever runs (webcontainer-style
++				// runtimes like Nodine spawn module workers per process). Module
++				// worker URLs are same-origin web URLs, so hand them to the native
++				// Worker directly — only the file:/vscode-remote massaging above is skipped.
++				options.name = `${name} -> ${options.name || path.basename(stringUrl.toString())}`;
++				return new _Worker(stringUrl, options);
++			}
+ 
+ 		// IMPORTANT: bootstrapFn is stringified and injected as worker blob-url. Because of that it CANNOT
+ 		// have dependencies on other functions or variables. Only constant values are supported. Due to
+@@ -146,9 +158,8 @@ if ((<any>self).Worker) {
+ 			nativeImportScripts(workerUrl);
+ 		}).toString();
+ 
+-		const js = `(${bootstrapFnSource}('${stringUrl}'))`;
+-		options = options || {};
+-		options.name = `${name} -> ${options.name || path.basename(stringUrl.toString())}`;
++			const js = `(${bootstrapFnSource}('${stringUrl}'))`;
++			options.name = `${name} -> ${options.name || path.basename(stringUrl.toString())}`;
+ 		const blob = new Blob([js], { type: 'application/javascript' });
+ 		const blobUrl = URL.createObjectURL(blob);
+ 		return new _Worker(blobUrl, options);
