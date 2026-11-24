@@ -1,4 +1,4 @@
-// ../../../../tmp/nodine-dist-patched/errors/index.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/errors/index.js
 var NodineError = class extends Error {
   code;
   constructor(message, code) {
@@ -59,22 +59,23 @@ var SpawnError = class extends NodineError {
   }
 };
 
-// ../../../../tmp/nodine-dist-patched/environment.js
-var inBrowser = typeof window !== "undefined" && typeof document !== "undefined" || typeof self !== "undefined";
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/environment.js
+var inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
 function checkEnvironment() {
+  const inWorkerGlobal = typeof window === "undefined" && typeof self !== "undefined";
   const checks = [];
-  const hasWindow = typeof window !== "undefined" || typeof self !== "undefined";
-  const hasDocument = typeof document !== "undefined" || typeof self !== "undefined";
+  const hasWindow = typeof window !== "undefined";
+  const hasDocument = typeof document !== "undefined";
   checks.push({
     id: "browser-context",
-    ok: hasWindow && hasDocument,
+    ok: (hasWindow && hasDocument) || inWorkerGlobal,
     message: "Nodine boots inside a browser page (window/document are unavailable \u2014 are you running in Node?)"
   });
   if (!inBrowser)
     return checks;
   checks.push({
     id: "cross-origin-isolated",
-    ok: (typeof window !== "undefined" ? window : self).crossOriginIsolated === true,
+    ok: (typeof window !== "undefined" ? window.crossOriginIsolated : self.crossOriginIsolated) === true,
     message: 'the page is not cross-origin isolated \u2014 serve COOP "same-origin" and COEP "require-corp" or "credentialless" headers from your application origin'
   });
   checks.push({
@@ -84,7 +85,7 @@ function checkEnvironment() {
   });
   checks.push({
     id: "service-workers",
-    ok: typeof document === "undefined" || "serviceWorker" in navigator,
+    ok: inWorkerGlobal || "serviceWorker" in navigator,
     message: "Service Workers are unavailable (requires a secure context: https or localhost)"
   });
   checks.push({
@@ -154,10 +155,10 @@ function environmentFailures() {
   return checkEnvironment().filter((c) => !c.ok);
 }
 
-// ../../../../tmp/nodine-dist-patched/version.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/version.js
 var SDK_VERSION = "0.4.0";
 
-// ../../../../tmp/nodine-dist-patched/runtime-adapter.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/runtime-adapter.js
 var HeadlessTermSink = class {
   buffer = "";
   subscribers = /* @__PURE__ */ new Set();
@@ -238,7 +239,7 @@ function assertRuntimeSurface(sup) {
   }
 }
 
-// ../../../../tmp/nodine-dist-patched/types/filesystem.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/types/filesystem.js
 var Dirent = class {
   name;
   _kind;
@@ -260,7 +261,7 @@ var Dirent = class {
   }
 };
 
-// ../../../../tmp/nodine-dist-patched/fs-adapter.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/fs-adapter.js
 var dec = new TextDecoder();
 function decodeBytes(u8, encoding) {
   switch (encoding) {
@@ -449,7 +450,7 @@ async function rmRecursive(abs, sup) {
     throw new FileSystemError(errnoMessage(rc, abs, "rmdir"));
 }
 
-// ../../../../tmp/nodine-dist-patched/container.js
+// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/container.js
 var DEFAULT_RUNTIME_URL = "/nodine/supervisor.mjs";
 var Container = class _Container {
   supervisor;
@@ -536,7 +537,7 @@ var Container = class _Container {
       await supervisor.mkdirP(workdirPath);
     } catch {
     }
-    const container = new _Container(supervisor, term, workdirPath, new URL(runtimeUrl, typeof document !== "undefined" ? document.baseURI : self.location.origin));
+    const container = new _Container(supervisor, term, workdirPath, new URL(runtimeUrl, (typeof document !== "undefined" ? document.baseURI : self.location.origin)));
     container.__sup = supervisor;
     if (options.enablePreview !== false) {
       await container.initPreviewBridge(options.forwardPreviewErrors);

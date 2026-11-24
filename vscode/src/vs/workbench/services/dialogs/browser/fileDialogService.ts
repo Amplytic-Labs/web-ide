@@ -21,6 +21,7 @@ import { Iterable } from '../../../../base/common/iterator.js';
 import { WebFileSystemAccess } from '../../../../platform/files/browser/webFileSystemAccess.js';
 import { EmbeddedCodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/embeddedCodeEditorWidget.js';
 import { getErrorMessage } from '../../../../base/common/errors.js';
+import { IWorkspaceEditingService } from '../../workspaces/common/workspaceEditing.js';
 
 export class FileDialogService extends AbstractFileDialogService implements IFileDialogService {
 
@@ -93,7 +94,103 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 			return super.pickFolderAndOpenSimplified(schema, options);
 		}
 
-		throw new Error(localize('pickFolderAndOpen', "Can't open folders, try adding a folder to the workspace instead."));
+		const activeWindow = this.getFilePickerWindow();
+		if (WebFileSystemAccess.supported(activeWindow)) {
+			// Native flow: File System Access folder picker → workspace over the handle
+			const startIn = await this.getFilePickerStartIn(options.defaultUri) ?? 'documents';
+			try {
+				const handle = await activeWindow.showDirectoryPicker({ ...{ startIn } });
+				const uri = await this.fileSystemProvider.registerDirectoryHandle(handle);
+				return this.hostService.openWindow([{ folderUri: uri }], { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
+			} catch (error) {
+				return; // user cancelled the picker
+			}
+		}
+
+		// nodine: Fallback for browsers without showDirectoryPicker (Brave with
+		// strict fingerprinting shields, Firefox, Safari) — the bolt.diy flow:
+		// a hidden <input webkitdirectory> selects a folder, files are filtered
+		// (node_modules & friends are NEVER imported) and copied into an
+		// in-browser workspace, which then opens as a normal folder.
+		return this.pickFolderViaFileInputAndOpen(options);
+	}
+
+	// nodine: gitignore-style skip list for the webkitdirectory fallback —
+	// importing these (multi-GB node_modules) would hang the browser tab.
+	private static readonly FOLDER_PICK_IGNORE = [
+		'node_modules', '.git', '.next', '.turbo', '.cache', 'coverage',
+		'dist', 'build', 'out', '.parcel-cache', '.venv', 'target',
+	];
+
+	/**
+	 * nodine: bolt.diy-style folder pick for browsers without the File System
+	 * Access API. Returns the tmp: root of the imported folder, or undefined
+	 * when the user cancelled / nothing importable was found.
+	 */
+	private async pickFolderViaFileInput(): Promise<URI | undefined> {
+		const activeWindow = this.getFilePickerWindow();
+		const files = await new Promise<File[] | undefined>(resolve => {
+			const input = activeWindow.document.createElement('input');
+			input.type = 'file';
+			input.multiple = true;
+			(input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
+			input.style.display = 'none';
+			input.addEventListener('change', () => {
+				resolve(Array.from(input.files ?? []));
+				input.remove();
+			});
+			// user cancelled: no change event fires; resolve on the next window focus
+			activeWindow.addEventListener('focus', () => setTimeout(() => {
+				if (!input.files || input.files.length === 0) { resolve(undefined); input.remove(); }
+			}, 1000), { once: true });
+			activeWindow.document.body.appendChild(input);
+			input.click();
+		});
+		if (!files || files.length === 0) { return undefined; }
+
+		const relPath = (f: File): string => ((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name);
+		const folderName = relPath(files[0]).split('/')[0] || 'opened-folder';
+		const ignored = (rel: string): boolean =>
+			FileDialogService.FOLDER_PICK_IGNORE.some(seg => rel.split('/').includes(seg));
+
+		try {
+			// virtual in-browser workspace for the imported folder
+			const root = URI.from({ scheme: Schemas.tmp, path: `/${folderName}` });
+			const ensureFolder = async (dir: URI): Promise<void> => {
+				try { await this.fileService.createFolder(dir); } catch { /* exists */ }
+			};
+			await ensureFolder(root);
+
+			let imported = 0;
+			for (const file of files) {
+				const rel = relPath(file).split('/').slice(1).join('/') || file.name;
+				if (!rel || ignored(rel) || file.size > 512 * 1024) { continue; }
+				const target = URI.joinPath(root, rel);
+				await ensureFolder(URI.dirname(target));
+				await this.fileService.createFile(target, VSBuffer.wrap(new Uint8Array(await file.arrayBuffer())), { overwrite: true });
+				imported++;
+			}
+
+			if (imported === 0) {
+				this.dialogService.info(localize('openFolderViaInputEmpty', "No files imported from \"{0}\" — everything was filtered out (node_modules and build artifacts are skipped).", folderName));
+				return undefined;
+			}
+			return root;
+		} catch (error) {
+			this.dialogService.error(localize('openFolderViaInputFailed', "Failed to open folder: {0}", getErrorMessage(error)));
+			return undefined;
+		}
+	}
+
+	private async pickFolderViaFileInputAndOpen(options: IPickAndOpenOptions): Promise<void> {
+		const root = await this.pickFolderViaFileInput();
+		if (!root) { return; }
+
+		// Swap the imported folder into the CURRENT window's workspace (no
+		// reload: the in-memory tmp: files would not survive one).
+		const workspaceEditingService: IWorkspaceEditingService = this.instantiationService.invokeFunction(accessor => accessor.get(IWorkspaceEditingService));
+		const current = this.contextService.getWorkspace().folders;
+		await workspaceEditingService.updateFolders(0, current.length, [{ uri: root }], { force: true });
 	}
 
 	async pickWorkspaceAndOpen(options: IPickAndOpenOptions): Promise<void> {
@@ -190,6 +287,15 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 		}
 
 		const activeWindow = this.getFilePickerWindow();
+
+		// nodine: folder selection without the File System Access API (Brave
+		// strict shields / Firefox / Safari) — webkitdirectory input, files
+		// land in an in-browser tmp: folder, node_modules is never imported.
+		if (!options.canSelectFiles && options.canSelectFolders && !WebFileSystemAccess.supported(activeWindow)) {
+			const root = await this.pickFolderViaFileInput();
+			return root ? [root] : undefined;
+		}
+
 		if (!WebFileSystemAccess.supported(activeWindow)) {
 			return this.showUnsupportedBrowserWarning('open');
 		}

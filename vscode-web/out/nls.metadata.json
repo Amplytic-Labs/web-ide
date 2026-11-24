@@ -34236,6 +34236,8 @@
 					"&& denotes a mnemonic"
 				]
 			},
+			"openFolderViaInputEmpty",
+			"openFolderViaInputFailed",
 			{
 				"key": "openRemote",
 				"comment": [
@@ -66230,6 +66232,8 @@
 		"vs/workbench/services/dialogs/browser/fileDialogService": [
 			"&&Learn More",
 			"Open &&Files...",
+			"No files imported from \"{0}\" — everything was filtered out (node_modules and build artifacts are skipped).",
+			"Failed to open folder: {0}",
 			"&&Open Remote...",
 			"Can't open folders, try adding a folder to the workspace instead.",
 			"Can't open workspaces, try adding a folder to the workspace instead.",

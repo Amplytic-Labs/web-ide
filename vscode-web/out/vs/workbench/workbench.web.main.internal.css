@@ -68973,7 +68973,7 @@ body {
   display: none;
 }
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {
-  width: 35px;
+  width: 132px;
   height: 100%;
   position: relative;
   z-index: 2500;
@@ -68981,10 +68981,15 @@ body {
   order: 1;
 }
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon:not(.codicon) {
-  background-image: url("../../media/code-icon.svg");
+  background-image: url("../../media/nodine-text-logo.svg");
   background-repeat: no-repeat;
-  background-position: center center;
-  background-size: 16px;
+  background-position: left center;
+  background-size: contain;
+  margin-left: 8px;
+  background-color: #17171d;
+  border-radius: 4px;
+  margin-top: 4px;
+  margin-bottom: 4px;
 }
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon.codicon {
   line-height: 30px;

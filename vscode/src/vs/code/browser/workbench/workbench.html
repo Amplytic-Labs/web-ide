@@ -30,7 +30,10 @@
 
 		<!-- Startup fallback: shown only if the scripts below never run, e.g. because a proxy,
 			extension or content filter blocked or rewrote them. Styles are inlined and hardcoded
-			because no theme or workbench CSS has loaded at that point. -->
+			because no theme or workbench CSS has loaded at that point.
+			nodine: doubles as the branded loading screen — a spinner shows while the
+			workbench bundle downloads on slow first load (it is multi-MB static),
+			and the "failed to load" copy only appears after 10s without progress. -->
 		<style>
 			#vscode-startup-fallback {
 				visibility: hidden;
@@ -67,6 +70,40 @@
 				line-height: 1.5;
 			}
 
+			#vscode-startup-fallback .nodine-loading {
+				margin: 0;
+				font-size: 14px;
+				font-weight: 600;
+				color: #61e925;
+			}
+
+			#vscode-startup-fallback .nodine-loading::after {
+				content: '';
+				display: inline-block;
+				width: 12px;
+				text-align: left;
+				animation: nodine-dots 1.2s steps(4) infinite;
+			}
+
+			@keyframes nodine-dots {
+				0% { content: ''; }
+				25% { content: '.'; }
+				50% { content: '..'; }
+				75%, 100% { content: '...'; }
+			}
+
+			#vscode-startup-fallback .nodine-error {
+				display: none;
+			}
+
+			#vscode-startup-fallback.reveal-error .nodine-error {
+				display: block;
+			}
+
+			#vscode-startup-fallback.reveal-error .nodine-loading {
+				display: none;
+			}
+
 			@media (prefers-color-scheme: dark) {
 				#vscode-startup-fallback {
 					color: #cccccc;
@@ -79,8 +116,18 @@
 
 	<body aria-label="">
 		<div id="vscode-startup-fallback">
-			<h1>The editor failed to load</h1>
-			<p>A proxy, browser extension or content filter may be blocking or modifying this page's scripts. Check the browser developer tools console for Content Security Policy errors.</p>
+			<h1 class="nodine-loading">Loading Nodine Web IDE</h1>
+			<p class="nodine-loading">Real VS Code is downloading to your browser (a few MB, cached after the first load).</p>
+			<h1 class="nodine-error">The editor failed to load</h1>
+			<p class="nodine-error">A proxy, browser extension or content filter may be blocking or modifying this page's scripts. Check the browser developer tools console for Content Security Policy errors.</p>
+			<script nonce="{{WORKBENCH_SCRIPT_NONCE}}">
+				// The workbench removes #vscode-startup-fallback as soon as it starts.
+				// If we are still here after 10s (the CSS reveal), swap loading copy → error copy.
+				setTimeout(() => {
+					const el = document.getElementById('vscode-startup-fallback');
+					if (el) { el.classList.add('reveal-error'); }
+				}, 10100);
+			</script>
 		</div>
 	</body>
 

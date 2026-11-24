@@ -29052,7 +29052,7 @@ if (typeof vscodeGlobal2 !== "undefined" && typeof vscodeGlobal2.context !== "un
     }
   }
 } else {
-  product = { "nameShort": "Code - OSS", "nameLong": "Code - OSS", "applicationName": "code-oss", "dataFolderName": ".vscode-oss", "sharedDataFolderName": ".vscode-oss-shared", "win32MutexName": "vscodeoss", "licenseName": "MIT", "licenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt", "serverLicenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt", "serverGreeting": [], "serverLicense": [], "serverLicensePrompt": "", "serverApplicationName": "code-server-oss", "serverDataFolderName": ".vscode-server-oss", "tunnelApplicationName": "code-tunnel-oss", "win32DirName": "Microsoft Code OSS", "win32NameVersion": "Microsoft Code OSS", "win32RegValueName": "CodeOSS", "win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}", "win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}", "win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}", "win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}", "win32AppUserModelId": "Microsoft.CodeOSS", "win32ShellNameShort": "C&ode - OSS", "win32TunnelServiceMutex": "vscodeoss-tunnelservice", "win32TunnelMutex": "vscodeoss-tunnel", "darwinBundleIdentifier": "com.visualstudio.code.oss", "darwinProfileUUID": "47827DD9-4734-49A0-AF80-7E19B11495CC", "darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959", "linuxDesktopName": "com.visualstudio.CodeOSS", "linuxIconName": "code-oss", "licenseFileName": "LICENSE.txt", "reportIssueUrl": "https://github.com/microsoft/vscode/issues/new", "nodejsArtifactFeed": "", "electronArtifactFeed": "", "urlProtocol": "code-oss", "agentsTelemetryAppName": "agents", "webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/", "builtInExtensions": [], "defaultChatAgent": { "extensionId": "GitHub.copilot", "chatExtensionId": "GitHub.copilot-chat", "chatExtensionOutputId": "GitHub.copilot-chat.GitHub Copilot Chat.log", "chatExtensionOutputExtensionStateCommand": "github.copilot.debug.extensionState", "documentationUrl": "https://aka.ms/github-copilot-overview", "termsStatementUrl": "https://aka.ms/github-copilot-terms-statement", "privacyStatementUrl": "https://aka.ms/github-copilot-privacy-statement", "skusDocumentationUrl": "https://aka.ms/github-copilot-plans", "optimizeUsageDocumentationUrl": "https://aka.ms/token-usage-tips", "publicCodeMatchesUrl": "https://aka.ms/github-copilot-match-public-code", "managePlanUrl": "https://aka.ms/github-copilot-manage-plan", "upgradePlanUrl": "https://aka.ms/github-copilot-upgrade-plan", "signUpUrl": "https://aka.ms/github-sign-up", "provider": { "default": { "id": "github", "name": "GitHub" }, "enterprise": { "id": "github-enterprise", "name": "GHE" }, "google": { "id": "google", "name": "Google" }, "apple": { "id": "apple", "name": "Apple" }, "microsoft": { "id": "microsoft", "name": "Microsoft" } }, "providerExtensionId": "vscode.github-authentication", "providerUriSetting": "github-enterprise.uri", "providerScopes": [["read:user", "user:email", "repo", "workflow"], ["user:email"], ["read:user"]], "entitlementUrl": "https://api.github.com/copilot_internal/user", "entitlementSignupLimitedUrl": "https://api.github.com/copilot_internal/subscribe_limited_user", "chatQuotaExceededContext": "github.copilot.chat.quotaExceeded", "completionsQuotaExceededContext": "github.copilot.completions.quotaExceeded", "walkthroughCommand": "github.copilot.open.walkthrough", "completionsMenuCommand": "github.copilot.toggleStatusMenu", "chatRefreshTokenCommand": "github.copilot.refreshToken", "generateCommitMessageCommand": "github.copilot.git.generateCommitMessage", "resolveMergeConflictsCommand": "github.copilot.git.resolveMergeConflicts", "completionsAdvancedSetting": "github.copilot.advanced", "completionsEnablementSetting": "github.copilot.enable", "nextEditSuggestionsSetting": "github.copilot.nextEditSuggestions.enabled", "tokenEntitlementUrl": "https://api.github.com/copilot_internal/v2/token", "mcpRegistryDataUrl": "https://api.github.com/copilot/mcp_registry", "mcpConnectorsUrl": "https://api.github.com/copilot-connectors/api/v1", "managedSettingsUrl": "https://api.github.com/copilot_internal/managed_settings" }, "trustedExtensionAuthAccess": { "github": ["GitHub.copilot-chat"], "github-enterprise": ["GitHub.copilot-chat"], "microsoft": ["vscode.github-authentication"] }, "onboardingKeymaps": [{ "id": "vscode", "label": "VS Code", "description": "Default keyboard mapping" }, { "id": "sublime", "label": "Sublime Text", "extensionId": "ms-vscode.sublime-keybindings", "description": "Keyboard mapping from Sublime Text" }, { "id": "intellij", "label": "IntelliJ / JetBrains", "extensionId": "k--kato.intellij-idea-keybindings", "description": "Keyboard mapping from IntelliJ IDEA" }, { "id": "vim", "label": "Vim", "extensionId": "vscodevim.vim", "description": "Vim modal editing" }, { "id": "eclipse", "label": "Eclipse", "extensionId": "alphabotsec.vscode-eclipse-keybindings", "description": "Keyboard mapping from Eclipse" }, { "id": "notepadpp", "label": "Notepad++", "extensionId": "ms-vscode.notepadplusplus-keybindings", "description": "Keyboard mapping from Notepad++" }], "onboardingThemes": [{ "id": "dark-2026", "label": "Dark 2026", "themeId": "Dark 2026", "type": "dark" }, { "id": "hc-dark", "label": "Dark High Contrast", "themeId": "Default High Contrast", "type": "hcDark" }, { "id": "solarized-dark", "label": "Solarized Dark", "themeId": "Solarized Dark", "type": "dark" }, { "id": "light-2026", "label": "Light 2026", "themeId": "Light 2026", "type": "light" }, { "id": "hc-light", "label": "Light High Contrast", "themeId": "Default High Contrast Light", "type": "hcLight" }, { "id": "solarized-light", "label": "Solarized Light", "themeId": "Solarized Light", "type": "light" }], "builtInExtensionsEnabledWithAutoUpdates": ["GitHub.copilot-chat"], "sessionsWindowAllowedExtensions": [], "voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice", "version": "1.149.0", "commit": "679e1ca71531278279b8aed7be19c0e6b00f1804", "date": "2026-11-24T09:53:38Z" };
+  product = { "nameShort": "Nodine IDE", "nameLong": "Nodine Web IDE", "applicationName": "nodine-ide", "dataFolderName": ".nodine-ide", "sharedDataFolderName": ".vscode-oss-shared", "win32MutexName": "nodineide", "licenseName": "MIT", "licenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt", "serverLicenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt", "serverGreeting": [], "serverLicense": [], "serverLicensePrompt": "", "serverApplicationName": "nodine-ide-server", "serverDataFolderName": ".vscode-server-oss", "tunnelApplicationName": "code-tunnel-oss", "win32DirName": "Microsoft Code OSS", "win32NameVersion": "Microsoft Code OSS", "win32RegValueName": "CodeOSS", "win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}", "win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}", "win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}", "win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}", "win32AppUserModelId": "Microsoft.CodeOSS", "win32ShellNameShort": "C&ode - OSS", "win32TunnelServiceMutex": "vscodeoss-tunnelservice", "win32TunnelMutex": "vscodeoss-tunnel", "darwinBundleIdentifier": "com.visualstudio.code.oss", "darwinProfileUUID": "47827DD9-4734-49A0-AF80-7E19B11495CC", "darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959", "linuxDesktopName": "com.visualstudio.CodeOSS", "linuxIconName": "code-oss", "licenseFileName": "LICENSE.txt", "reportIssueUrl": "https://github.com/Amplytic-Labs/web-ide/issues/new/choose", "nodejsArtifactFeed": "", "electronArtifactFeed": "", "urlProtocol": "nodine-ide", "agentsTelemetryAppName": "agents", "webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/", "builtInExtensions": [], "defaultChatAgent": { "extensionId": "GitHub.copilot", "chatExtensionId": "GitHub.copilot-chat", "chatExtensionOutputId": "GitHub.copilot-chat.GitHub Copilot Chat.log", "chatExtensionOutputExtensionStateCommand": "github.copilot.debug.extensionState", "documentationUrl": "https://aka.ms/github-copilot-overview", "termsStatementUrl": "https://aka.ms/github-copilot-terms-statement", "privacyStatementUrl": "https://aka.ms/github-copilot-privacy-statement", "skusDocumentationUrl": "https://aka.ms/github-copilot-plans", "optimizeUsageDocumentationUrl": "https://aka.ms/token-usage-tips", "publicCodeMatchesUrl": "https://aka.ms/github-copilot-match-public-code", "managePlanUrl": "https://aka.ms/github-copilot-manage-plan", "upgradePlanUrl": "https://aka.ms/github-copilot-upgrade-plan", "signUpUrl": "https://aka.ms/github-sign-up", "provider": { "default": { "id": "github", "name": "GitHub" }, "enterprise": { "id": "github-enterprise", "name": "GHE" }, "google": { "id": "google", "name": "Google" }, "apple": { "id": "apple", "name": "Apple" }, "microsoft": { "id": "microsoft", "name": "Microsoft" } }, "providerExtensionId": "vscode.github-authentication", "providerUriSetting": "github-enterprise.uri", "providerScopes": [["read:user", "user:email", "repo", "workflow"], ["user:email"], ["read:user"]], "entitlementUrl": "https://api.github.com/copilot_internal/user", "entitlementSignupLimitedUrl": "https://api.github.com/copilot_internal/subscribe_limited_user", "chatQuotaExceededContext": "github.copilot.chat.quotaExceeded", "completionsQuotaExceededContext": "github.copilot.completions.quotaExceeded", "walkthroughCommand": "github.copilot.open.walkthrough", "completionsMenuCommand": "github.copilot.toggleStatusMenu", "chatRefreshTokenCommand": "github.copilot.refreshToken", "generateCommitMessageCommand": "github.copilot.git.generateCommitMessage", "resolveMergeConflictsCommand": "github.copilot.git.resolveMergeConflicts", "completionsAdvancedSetting": "github.copilot.advanced", "completionsEnablementSetting": "github.copilot.enable", "nextEditSuggestionsSetting": "github.copilot.nextEditSuggestions.enabled", "tokenEntitlementUrl": "https://api.github.com/copilot_internal/v2/token", "mcpRegistryDataUrl": "https://api.github.com/copilot/mcp_registry", "mcpConnectorsUrl": "https://api.github.com/copilot-connectors/api/v1", "managedSettingsUrl": "https://api.github.com/copilot_internal/managed_settings" }, "trustedExtensionAuthAccess": { "github": ["GitHub.copilot-chat"], "github-enterprise": ["GitHub.copilot-chat"], "microsoft": ["vscode.github-authentication"] }, "onboardingKeymaps": [{ "id": "vscode", "label": "VS Code", "description": "Default keyboard mapping" }, { "id": "sublime", "label": "Sublime Text", "extensionId": "ms-vscode.sublime-keybindings", "description": "Keyboard mapping from Sublime Text" }, { "id": "intellij", "label": "IntelliJ / JetBrains", "extensionId": "k--kato.intellij-idea-keybindings", "description": "Keyboard mapping from IntelliJ IDEA" }, { "id": "vim", "label": "Vim", "extensionId": "vscodevim.vim", "description": "Vim modal editing" }, { "id": "eclipse", "label": "Eclipse", "extensionId": "alphabotsec.vscode-eclipse-keybindings", "description": "Keyboard mapping from Eclipse" }, { "id": "notepadpp", "label": "Notepad++", "extensionId": "ms-vscode.notepadplusplus-keybindings", "description": "Keyboard mapping from Notepad++" }], "onboardingThemes": [{ "id": "dark-2026", "label": "Dark 2026", "themeId": "Dark 2026", "type": "dark" }, { "id": "hc-dark", "label": "Dark High Contrast", "themeId": "Default High Contrast", "type": "hcDark" }, { "id": "solarized-dark", "label": "Solarized Dark", "themeId": "Solarized Dark", "type": "dark" }, { "id": "light-2026", "label": "Light 2026", "themeId": "Light 2026", "type": "light" }, { "id": "hc-light", "label": "Light High Contrast", "themeId": "Default High Contrast Light", "type": "hcLight" }, { "id": "solarized-light", "label": "Solarized Light", "themeId": "Solarized Light", "type": "light" }], "builtInExtensionsEnabledWithAutoUpdates": ["GitHub.copilot-chat"], "sessionsWindowAllowedExtensions": [], "voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice", "extensionsGallery": { "serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery", "itemUrl": "https://marketplace.visualstudio.com/items", "cacheUrl": "https://vscode.blob.core.windows.net/gallery/index", "controlUrl": "", "recommendationsUrl": "https://aka.ms/vscode-workspace-extensions" }, "version": "1.149.0", "commit": "679e1ca71531278279b8aed7be19c0e6b00f1804", "date": "2026-11-24T09:53:38Z" };
   if (Object.keys(product).length === 0) {
     Object.assign(product, {
       version: "1.104.0-dev",
@@ -32904,7 +32904,7 @@ var APPROVED_ACCOUNT_ORGANIZATIONS_POLICY_NAME = "ChatApprovedAccountOrganizatio
 var ChatAccountPolicyGateActiveContext = new RawContextKey(
   "chatAccountPolicyGateActive",
   false,
-  { type: "boolean", description: localize(27032, null) }
+  { type: "boolean", description: localize(27034, null) }
 );
 var IAccountPolicyGateService = createDecorator("accountPolicyGateService");
 var AccountPolicyService = class extends AbstractPolicyService {
@@ -34880,8 +34880,8 @@ var extensionKindSchema = {
     "workspace"
   ],
   enumDescriptions: [
-    localize(26810, null),
-    localize(26893, null)
+    localize(26812, null),
+    localize(26895, null)
   ]
 };
 var schemaId = "vscode://schemas/vscode-extensions";
@@ -34889,25 +34889,25 @@ var schema = {
   properties: {
     engines: {
       type: "object",
-      description: localize(26877, null),
+      description: localize(26879, null),
       properties: {
         "vscode": {
           type: "string",
-          description: localize(26878, null),
+          description: localize(26880, null),
           default: "^1.105.0"
         }
       }
     },
     publisher: {
-      description: localize(26889, null),
+      description: localize(26891, null),
       type: "string"
     },
     displayName: {
-      description: localize(26874, null),
+      description: localize(26876, null),
       type: "string"
     },
     categories: {
-      description: localize(26868, null),
+      description: localize(26870, null),
       type: "array",
       uniqueItems: true,
       items: {
@@ -34919,28 +34919,28 @@ var schema = {
           {
             type: "string",
             const: "Languages",
-            deprecationMessage: localize(26869, null)
+            deprecationMessage: localize(26871, null)
           }
         ]
       }
     },
     galleryBanner: {
       type: "object",
-      description: localize(26881, null),
+      description: localize(26883, null),
       properties: {
         color: {
-          description: localize(26882, null),
+          description: localize(26884, null),
           type: "string"
         },
         theme: {
-          description: localize(26883, null),
+          description: localize(26885, null),
           type: "string",
           enum: ["dark", "light"]
         }
       }
     },
     contributes: {
-      description: localize(26870, null),
+      description: localize(26872, null),
       type: "object",
       // eslint-disable-next-line local/code-no-any-casts
       properties: {
@@ -34950,14 +34950,14 @@ var schema = {
     },
     preview: {
       type: "boolean",
-      description: localize(26887, null)
+      description: localize(26889, null)
     },
     enableProposedApi: {
       type: "boolean",
-      deprecationMessage: localize(26876, null)
+      deprecationMessage: localize(26878, null)
     },
     enabledApiProposals: {
-      markdownDescription: localize(26875, null),
+      markdownDescription: localize(26877, null),
       type: "array",
       uniqueItems: true,
       items: {
@@ -34967,187 +34967,187 @@ var schema = {
       }
     },
     api: {
-      markdownDescription: localize(26846, null),
+      markdownDescription: localize(26848, null),
       type: "string",
       enum: ["none"],
       enumDescriptions: [
-        localize(26847, null)
+        localize(26849, null)
       ]
     },
     activationEvents: {
-      description: localize(26811, null),
+      description: localize(26813, null),
       type: "array",
       items: {
         type: "string",
         defaultSnippets: [
           {
             label: "onWebviewPanel",
-            description: localize(26843, null),
+            description: localize(26845, null),
             body: "onWebviewPanel:viewType"
           },
           {
             label: "onLanguage",
-            description: localize(26826, null),
+            description: localize(26828, null),
             body: "onLanguage:${1:languageId}"
           },
           {
             label: "onCommand",
-            description: localize(26816, null),
+            description: localize(26818, null),
             body: "onCommand:${2:commandId}"
           },
           {
             label: "onDebug",
-            description: localize(26818, null),
+            description: localize(26820, null),
             body: "onDebug"
           },
           {
             label: "onDebugInitialConfigurations",
-            description: localize(26821, null),
+            description: localize(26823, null),
             body: "onDebugInitialConfigurations"
           },
           {
             label: "onDebugDynamicConfigurations",
-            description: localize(26820, null),
+            description: localize(26822, null),
             body: "onDebugDynamicConfigurations"
           },
           {
             label: "onDebugResolve",
-            description: localize(26822, null),
+            description: localize(26824, null),
             body: "onDebugResolve:${6:type}"
           },
           {
             label: "onDebugAdapterProtocolTracker",
-            description: localize(26819, null),
+            description: localize(26821, null),
             body: "onDebugAdapterProtocolTracker:${6:type}"
           },
           {
             label: "workspaceContains",
-            description: localize(26845, null),
+            description: localize(26847, null),
             body: "workspaceContains:${4:filePattern}"
           },
           {
             label: "onStartupFinished",
-            description: localize(26834, null),
+            description: localize(26836, null),
             body: "onStartupFinished"
           },
           {
             label: "onTaskType",
-            description: localize(26835, null),
+            description: localize(26837, null),
             body: "onTaskType:${1:taskType}"
           },
           {
             label: "onFileSystem",
-            description: localize(26824, null),
+            description: localize(26826, null),
             body: "onFileSystem:${1:scheme}"
           },
           {
             label: "onEditSession",
-            description: localize(26823, null),
+            description: localize(26825, null),
             body: "onEditSession:${1:scheme}"
           },
           {
             label: "onSearch",
-            description: localize(26833, null),
+            description: localize(26835, null),
             body: "onSearch:${7:scheme}"
           },
           {
             label: "onView",
             body: "onView:${5:viewId}",
-            description: localize(26841, null)
+            description: localize(26843, null)
           },
           {
             label: "onUri",
             body: "onUri",
-            description: localize(26840, null)
+            description: localize(26842, null)
           },
           {
             label: "onOpenExternalUri",
             body: "onOpenExternalUri",
-            description: localize(26831, null)
+            description: localize(26833, null)
           },
           {
             label: "onCustomEditor",
             body: "onCustomEditor:${9:viewType}",
-            description: localize(26817, null)
+            description: localize(26819, null)
           },
           {
             label: "onNotebook",
             body: "onNotebook:${1:type}",
-            description: localize(26830, null)
+            description: localize(26832, null)
           },
           {
             label: "onAuthenticationRequest",
             body: "onAuthenticationRequest:${11:authenticationProviderId}",
-            description: localize(26812, null)
+            description: localize(26814, null)
           },
           {
             label: "onRenderer",
-            description: localize(26832, null),
+            description: localize(26834, null),
             body: "onRenderer:${11:rendererId}"
           },
           {
             label: "onTerminalProfile",
             body: "onTerminalProfile:${1:terminalId}",
-            description: localize(26837, null)
+            description: localize(26839, null)
           },
           {
             label: "onTerminalQuickFixRequest",
             body: "onTerminalQuickFixRequest:${1:quickFixId}",
-            description: localize(26838, null)
+            description: localize(26840, null)
           },
           {
             label: "onWalkthrough",
             body: "onWalkthrough:${1:walkthroughID}",
-            description: localize(26842, null)
+            description: localize(26844, null)
           },
           {
             label: "onIssueReporterOpened",
             body: "onIssueReporterOpened",
-            description: localize(26825, null)
+            description: localize(26827, null)
           },
           {
             label: "onChatParticipant",
             body: "onChatParticipant:${1:participantId}",
-            description: localize(26815, null)
+            description: localize(26817, null)
           },
           {
             label: "onChatArtifactIntegration",
             body: "onChatArtifactIntegration",
-            description: localize(26813, null)
+            description: localize(26815, null)
           },
           {
             label: "onChatContextProvider",
             body: "onChatContextProvider:${1:contextProviderId}",
-            description: localize(26814, null)
+            description: localize(26816, null)
           },
           {
             label: "onLanguageModelChatProvider",
             body: "onLanguageModelChatProvider:${1:vendor}",
-            description: localize(26827, null)
+            description: localize(26829, null)
           },
           {
             label: "onLanguageModelTool",
             body: "onLanguageModelTool:${1:toolId}",
-            description: localize(26828, null)
+            description: localize(26830, null)
           },
           {
             label: "onTerminal",
             body: "onTerminal:{1:shellType}",
-            description: localize(26836, null)
+            description: localize(26838, null)
           },
           {
             label: "onTerminalShellIntegration",
             body: "onTerminalShellIntegration:${1:shellType}",
-            description: localize(26839, null)
+            description: localize(26841, null)
           },
           {
             label: "onMcpCollection",
-            description: localize(26829, null),
+            description: localize(26831, null),
             body: "onMcpCollection:${2:collectionId}"
           },
           {
             label: "*",
-            description: localize(26844, null),
+            description: localize(26846, null),
             body: "*"
           }
         ]
@@ -35155,35 +35155,35 @@ var schema = {
     },
     badges: {
       type: "array",
-      description: localize(26848, null),
+      description: localize(26850, null),
       items: {
         type: "object",
         required: ["url", "href", "description"],
         properties: {
           url: {
             type: "string",
-            description: localize(26851, null)
+            description: localize(26853, null)
           },
           href: {
             type: "string",
-            description: localize(26850, null)
+            description: localize(26852, null)
           },
           description: {
             type: "string",
-            description: localize(26849, null)
+            description: localize(26851, null)
           }
         }
       }
     },
     markdown: {
       type: "string",
-      description: localize(26886, null),
+      description: localize(26888, null),
       enum: ["github", "standard"],
       default: "github"
     },
     qna: {
       default: "marketplace",
-      description: localize(26890, null),
+      description: localize(26892, null),
       anyOf: [
         {
           type: ["string", "boolean"],
@@ -35195,7 +35195,7 @@ var schema = {
       ]
     },
     extensionDependencies: {
-      description: localize(26880, null),
+      description: localize(26882, null),
       type: "array",
       uniqueItems: true,
       items: {
@@ -35204,7 +35204,7 @@ var schema = {
       }
     },
     extensionAffinity: {
-      description: localize(26879, null),
+      description: localize(26881, null),
       type: "array",
       uniqueItems: true,
       items: {
@@ -35213,7 +35213,7 @@ var schema = {
       }
     },
     extensionPack: {
-      description: localize(26871, null),
+      description: localize(26873, null),
       type: "array",
       uniqueItems: true,
       items: {
@@ -35222,39 +35222,39 @@ var schema = {
       }
     },
     extensionKind: {
-      description: localize(26803, null),
+      description: localize(26805, null),
       type: "array",
       items: extensionKindSchema,
       default: ["workspace"],
       defaultSnippets: [
         {
           body: ["ui"],
-          description: localize(26805, null)
-        },
-        {
-          body: ["workspace"],
           description: localize(26807, null)
         },
         {
-          body: ["ui", "workspace"],
-          description: localize(26806, null)
+          body: ["workspace"],
+          description: localize(26809, null)
         },
         {
-          body: ["workspace", "ui"],
+          body: ["ui", "workspace"],
           description: localize(26808, null)
         },
         {
+          body: ["workspace", "ui"],
+          description: localize(26810, null)
+        },
+        {
           body: [],
-          description: localize(26804, null)
+          description: localize(26806, null)
         }
       ]
     },
     capabilities: {
-      description: localize(26852, null),
+      description: localize(26854, null),
       type: "object",
       properties: {
         virtualWorkspaces: {
-          description: localize(26862, null),
+          description: localize(26864, null),
           type: ["boolean", "object"],
           defaultSnippets: [
             { label: "limited", body: { supported: "${1:limited}", description: "${2}" } },
@@ -35263,23 +35263,23 @@ var schema = {
           default: true.valueOf,
           properties: {
             supported: {
-              markdownDescription: localize(26864, null),
+              markdownDescription: localize(26866, null),
               type: ["string", "boolean"],
               enum: ["limited", true, false],
               enumDescriptions: [
-                localize(26866, null),
-                localize(26867, null),
-                localize(26865, null)
+                localize(26868, null),
+                localize(26869, null),
+                localize(26867, null)
               ]
             },
             description: {
               type: "string",
-              markdownDescription: localize(26863, null)
+              markdownDescription: localize(26865, null)
             }
           }
         },
         untrustedWorkspaces: {
-          description: localize(26855, null),
+          description: localize(26857, null),
           type: "object",
           required: ["supported"],
           defaultSnippets: [
@@ -35287,17 +35287,17 @@ var schema = {
           ],
           properties: {
             supported: {
-              markdownDescription: localize(26858, null),
+              markdownDescription: localize(26860, null),
               type: ["string", "boolean"],
               enum: ["limited", true, false],
               enumDescriptions: [
-                localize(26860, null),
-                localize(26861, null),
-                localize(26859, null)
+                localize(26862, null),
+                localize(26863, null),
+                localize(26861, null)
               ]
             },
             restrictedConfigurations: {
-              description: localize(26857, null),
+              description: localize(26859, null),
               type: "array",
               items: {
                 type: "string"
@@ -35305,12 +35305,12 @@ var schema = {
             },
             description: {
               type: "string",
-              markdownDescription: localize(26856, null)
+              markdownDescription: localize(26858, null)
             }
           }
         },
         agentsWindow: {
-          description: localize(26853, null),
+          description: localize(26855, null),
           type: "object",
           required: ["supported"],
           defaultSnippets: [
@@ -35318,7 +35318,7 @@ var schema = {
           ],
           properties: {
             supported: {
-              markdownDescription: localize(26854, null),
+              markdownDescription: localize(26856, null),
               type: "boolean"
             }
           }
@@ -35326,14 +35326,14 @@ var schema = {
       }
     },
     sponsor: {
-      description: localize(26872, null),
+      description: localize(26874, null),
       type: "object",
       defaultSnippets: [
         { body: { url: "${1:https:}" } }
       ],
       properties: {
         "url": {
-          description: localize(26873, null),
+          description: localize(26875, null),
           type: "string"
         }
       }
@@ -35342,26 +35342,26 @@ var schema = {
       type: "object",
       properties: {
         "vscode:prepublish": {
-          description: localize(26891, null),
+          description: localize(26893, null),
           type: "string"
         },
         "vscode:uninstall": {
-          description: localize(26892, null),
+          description: localize(26894, null),
           type: "string"
         }
       }
     },
     icon: {
       type: "string",
-      description: localize(26884, null)
+      description: localize(26886, null)
     },
     l10n: {
       type: "string",
-      description: localize(26885, null)
+      description: localize(26887, null)
     },
     pricing: {
       type: "string",
-      markdownDescription: localize(26888, null),
+      markdownDescription: localize(26890, null),
       enum: ["Free", "Trial"],
       default: "Free"
     }
@@ -35397,7 +35397,7 @@ schemaRegistry.registerSchema(schemaId, schema);
 schemaRegistry.registerSchema(productSchemaId, {
   properties: {
     extensionEnabledApiProposals: {
-      description: localize(26809, null),
+      description: localize(26811, null),
       type: "object",
       properties: {},
       additionalProperties: {
@@ -35606,11 +35606,11 @@ var spinningLoading = ThemeIcon.modify(Codicon.loading, "spin");
 var IUserDataProfileService = createDecorator("IUserDataProfileService");
 var IUserDataProfileManagementService = createDecorator("IUserDataProfileManagementService");
 var IUserDataProfileImportExportService = createDecorator("IUserDataProfileImportExportService");
-var defaultUserDataProfileIcon = registerIcon("defaultProfile-icon", Codicon.settings, localize(27462, null));
-var PROFILES_TITLE = localize2(27464, "Profiles");
+var defaultUserDataProfileIcon = registerIcon("defaultProfile-icon", Codicon.settings, localize(27464, null));
+var PROFILES_TITLE = localize2(27466, "Profiles");
 var PROFILES_CATEGORY = { ...PROFILES_TITLE };
 var PROFILE_EXTENSION = "code-profile";
-var PROFILE_FILTER = [{ name: localize(27463, null), extensions: [PROFILE_EXTENSION] }];
+var PROFILE_FILTER = [{ name: localize(27465, null), extensions: [PROFILE_EXTENSION] }];
 var CURRENT_PROFILE_CONTEXT = new RawContextKey("currentProfile", "");
 var HAS_PROFILES_CONTEXT = new RawContextKey("hasProfiles", false);
 
@@ -46405,7 +46405,7 @@ var WorkbenchMcpManagementService = class extends AbstractMcpManagementService {
     options2 = options2 ?? {};
     this.validateWorkspaceConfigOptions(options2);
     if (options2.workspaceConfig === "root" /* Root */ || options2.mcpResource && this.isWorkspaceRootResource(options2.mcpResource)) {
-      throw new Error(localize(27001, null));
+      throw new Error(localize(27003, null));
     }
     if (options2.target === 5 /* WORKSPACE */ || isWorkspaceFolder(options2.target)) {
       const mcpResource = options2.target === 5 /* WORKSPACE */ ? this.workspaceContextService.getWorkspace().configuration : options2.target.toResource(WORKSPACE_STANDALONE_CONFIGURATIONS[MCP_CONFIGURATION_KEY]);
@@ -46437,14 +46437,14 @@ var WorkbenchMcpManagementService = class extends AbstractMcpManagementService {
     const targets = this.workspaceInstallTargetService.getTargets();
     const workspaceConfiguration = this.workspaceContextService.getWorkspace().configuration;
     if ((options2.target === 5 /* WORKSPACE */ || options2.mcpResource && workspaceConfiguration && this.uriIdentityService.extUri.isEqual(options2.mcpResource, workspaceConfiguration)) && !targets.includes(5 /* WORKSPACE */)) {
-      throw new Error(localize(27003, null));
+      throw new Error(localize(27005, null));
     }
     const target = options2.target;
     if (isWorkspaceFolder(target) && !targets.some((candidate) => isWorkspaceFolder(candidate) && this.uriIdentityService.extUri.isEqual(candidate.uri, target.uri))) {
-      throw new Error(localize(27002, null));
+      throw new Error(localize(27004, null));
     }
     if (options2.workspaceConfig !== void 0 && !isWorkspaceFolder(options2.target)) {
-      throw new Error(localize(27004, null));
+      throw new Error(localize(27006, null));
     }
   }
   isWorkspaceRootResource(resource) {
@@ -46505,7 +46505,7 @@ var WorkbenchMcpManagementService = class extends AbstractMcpManagementService {
         const configuration = await this.mcpResourceScannerService.scanMcpServers(resource, target);
         collectMcpInputIds(configuration, referencedInputs);
       } catch (error) {
-        throw new Error(localize(27000, null, resource.toString(), getErrorMessage(error)), { cause: error });
+        throw new Error(localize(27002, null, resource.toString(), getErrorMessage(error)), { cause: error });
       }
     }));
     return [...referencedInputs];
@@ -46543,7 +46543,7 @@ var WorkspaceMcpResourceManagementService = class extends AbstractMcpResourceMan
   }
   async installFromGallery(server, options2) {
     if (this.format === "workspaceRoot" /* WorkspaceRoot */) {
-      throw new Error(localize(27001, null));
+      throw new Error(localize(27003, null));
     }
     this.logService.trace("MCP Management Service: installGallery", server.name, server.galleryUrl);
     this._onInstallMcpServer.fire({ name: server.name, mcpResource: this.mcpResource });
@@ -66443,7 +66443,7 @@ var QueryBuilder = class {
       } else {
         const probableWorkspaceFolderNameMatch = searchPath.match(/\.[\/\\](.+)[\/\\]?/);
         const probableWorkspaceFolderName = probableWorkspaceFolderNameMatch ? probableWorkspaceFolderNameMatch[1] : searchPath;
-        const searchPathNotFoundError = localize(27119, null, probableWorkspaceFolderName);
+        const searchPathNotFoundError = localize(27121, null, probableWorkspaceFolderName);
         throw new Error(searchPathNotFoundError);
       }
     }
@@ -98786,18 +98786,18 @@ var editorAssociationsConfigurationNode = {
       type: "string",
       enum: ["auto", "on", "off"],
       enumDescriptions: [
-        localize(26683, null),
         localize(26685, null),
-        localize(26684, null)
+        localize(26687, null),
+        localize(26686, null)
       ],
       default: "auto",
       tags: ["experimental", "accessibility"],
       experiment: { mode: "startup" },
-      markdownDescription: localize(26682, null)
+      markdownDescription: localize(26684, null)
     },
     [editorsAssociationsSettingId]: {
       type: "object",
-      markdownDescription: localize(26680, null),
+      markdownDescription: localize(26682, null),
       additionalProperties: {
         type: "string"
       },
@@ -98807,7 +98807,7 @@ var editorAssociationsConfigurationNode = {
     },
     [diffEditorsAssociationsSettingId]: {
       type: "object",
-      markdownDescription: localize(26679, null),
+      markdownDescription: localize(26681, null),
       additionalProperties: {
         type: "string"
       },
@@ -98821,7 +98821,7 @@ var editorAssociationsConfigurationNode = {
       items: {
         type: "string"
       },
-      markdownDescription: localize(26681, null),
+      markdownDescription: localize(26683, null),
       agentsWindow: {
         default: ["vscode.markdown.preview.editor"]
       }
@@ -108341,7 +108341,7 @@ if (self.Worker) {
       throw new Error(`Creating workers from remote extensions is currently not supported.`);
     }
     options2 = options2 || {};
-    if (options2.type === 'module') {
+    if (options2.type === "module") {
       options2.name = `${name} -> ${options2.name || basename(stringUrl.toString())}`;
       return new _Worker(stringUrl, options2);
     }

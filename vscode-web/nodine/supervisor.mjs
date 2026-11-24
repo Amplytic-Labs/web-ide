@@ -1,3 +1,7 @@
+// Worker-safe diagnostics sink (patched by stage-nodine): window is
+// undefined inside Workers (e.g. the VS Code web extension host).
+const DIAG = (typeof window !== 'undefined' && window.__p2007) || undefined;
+
 // P2-006-007 supervisor — the browser TERMINAL + PROCESS SUPERVISOR.
 //
 // One shared kernel (KSM + wasm) booted once per page inside the
@@ -51,11 +55,6 @@ const WORKER_URL = (() => {
     return w.href;
   } catch { return 'runtime-worker.mjs'; }
 })();
-
-// Worker-safe diagnostics sink: `window.__p2007` on the main thread, no-op in
-// a Worker context (where `window` is not defined — the VS Code extension
-// host embeds this supervisor inside a worker).
-const DIAG = (typeof window !== 'undefined' && window.__p2007) || undefined;
 
 // ---------------------------------------------------------------------------
 // Terminal emulator (80×30 viewport, ≥5000-line scrollback, minimal ANSI set)
@@ -1599,7 +1598,7 @@ export class Supervisor {
     try { await this.rpc({ type: 'shutdown' }); } catch {}
     this.setKernel('stopped', 'runtime stopped');
     this.updateProcs();
-    DIAG && (DIAG.exitCode = code, DIAG.stopped = true);
+    if (DIAG) { DIAG.exitCode = code; DIAG.stopped = true; };
   }
 
   // -- B1-PREVIEW: the browser preview bridge ---------------------------------

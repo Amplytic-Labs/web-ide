@@ -1,3 +1,4 @@
+"use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -516,7 +517,7 @@ function createDevTerminal(context) {
 
 // src/githubImport.ts
 var vscode3 = __toESM(require("vscode"));
-var IGNORE_DIRS = /* @__PURE__ */ new Set([
+var IGNORE_SEGMENTS = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
   ".github",
@@ -524,14 +525,18 @@ var IGNORE_DIRS = /* @__PURE__ */ new Set([
   "dist",
   "build",
   ".next",
+  ".turbo",
   ".cache",
   "coverage",
   ".idea",
-  ".turbo",
   "out",
-  ".parcel-cache"
+  ".parcel-cache",
+  "target"
 ]);
-var MAX_CONCURRENT = 6;
+var IGNORE_EXTENSIONS = /* @__PURE__ */ new Set([".log", ".map"]);
+var ALWAYS_ALLOW = /* @__PURE__ */ new Set(["package-lock.json", "yarn.lock", "pnpm-lock.yaml"]);
+var MAX_FILES = 1e3;
+var MAX_FILE_KB_DEFAULT = 512;
 function parseRepoInput(input) {
   input = input.trim().replace(/\.git$/, "");
   let ref;
@@ -550,6 +555,20 @@ function parseRepoInput(input) {
   }
   return null;
 }
+function shouldInclude(path) {
+  const name = path.split("/").pop() || "";
+  if (ALWAYS_ALLOW.has(name)) {
+    return true;
+  }
+  if (path.split("/").some((seg) => IGNORE_SEGMENTS.has(seg))) {
+    return false;
+  }
+  const dot = path.lastIndexOf(".");
+  if (dot >= 0 && IGNORE_EXTENSIONS.has(path.slice(dot))) {
+    return false;
+  }
+  return true;
+}
 async function ghApi(path, token) {
   const headers = { Accept: "application/vnd.github+json" };
   if (token) {
@@ -557,38 +576,34 @@ async function ghApi(path, token) {
   }
   const res = await fetch(`https://api.github.com${path}`, { headers });
   if (res.status === 404) {
-    throw new Error("repo, ref or path not found (404)");
+    throw new Error("repo, ref or path not found (404) \u2014 check the URL" + (token ? "" : " and whether the repo is private (a token is needed for that)"));
+  }
+  if (res.status === 401) {
+    throw new Error("GitHub rejected the token (401).");
   }
   if (res.status === 403) {
     const body = await res.json().catch(() => ({}));
     if (body?.message?.includes("rate limit")) {
-      throw new Error("GitHub rate limit exceeded. Set webide-dev.githubToken (PAT) for 5000 req/hr.");
+      throw new Error("GitHub rate limit exceeded. Provide a PAT (raises it to 5000/hr).");
     }
-    throw new Error(String(body?.message || "HTTP 403 (forbidden \u2014 private repo? add a token)"));
+    throw new Error(String(body?.message || "HTTP 403 (forbidden \u2014 private repo? a token is needed)"));
   }
   if (!res.ok) {
     throw new Error(`GitHub returned HTTP ${res.status}`);
   }
   return res.json();
 }
-async function importFromGithub(writeFile, ensureDir, reveal) {
-  const input = await vscode3.window.showInputBox({
-    prompt: "GitHub repository (owner/repo, full URL, or URL#branch)",
-    placeHolder: "e.g. expressjs/express",
-    ignoreFocusOut: true
-  });
-  if (!input) {
-    return;
-  }
-  const parsed = parseRepoInput(input);
+var sessionToken;
+async function importFromGithub(inputs, writeFile, ensureDir, reveal) {
+  const { repoInput, tokenInput } = inputs;
+  const parsed = parseRepoInput(repoInput);
   if (!parsed) {
-    vscode3.window.showErrorMessage(`Not a GitHub repository: ${input}`);
+    vscode3.window.showErrorMessage(`Not a GitHub repository: ${repoInput}`);
     return;
   }
   const { owner, repo, ref } = parsed;
-  const config = vscode3.workspace.getConfiguration("webide-dev");
-  const maxKb = config.get("githubMaxFileKb", 512);
-  const token = config.get("githubToken", "") || void 0;
+  const token = tokenInput.trim() || sessionToken;
+  const maxKb = vscode3.workspace.getConfiguration("webide-dev").get("githubMaxFileKb", MAX_FILE_KB_DEFAULT);
   await vscode3.window.withProgress({
     location: vscode3.ProgressLocation.Notification,
     title: `Importing ${owner}/${repo}${ref ? `#${ref}` : ""}`,
@@ -603,17 +618,24 @@ async function importFromGithub(writeFile, ensureDir, reveal) {
         const commit = await ghApi(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref ?? "HEAD")}`, token);
         sha = commit.sha;
       }
+      if (tokenInput.trim()) {
+        sessionToken = tokenInput.trim();
+      }
       progress.report({ message: "listing files\u2026" });
       const tree = await ghApi(`/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`, token);
       if (tree.truncated) {
         vscode3.window.showWarningMessage("Repo tree truncated by GitHub (very large repo) \u2014 importing a subset.");
       }
-      const blobs = tree.tree.filter((n) => n.type === "blob" && !n.path.split("/").some((s) => IGNORE_DIRS.has(s)) && (n.size ?? 0) <= maxKb * 1024);
+      const blobs = tree.tree.filter((n) => n.type === "blob" && shouldInclude(n.path) && (n.size ?? 0) <= maxKb * 1024);
+      if (blobs.length > MAX_FILES) {
+        vscode3.window.showWarningMessage(`Repo has ${blobs.length} importable files \u2014 importing the first ${MAX_FILES} (large-repo cap).`);
+      }
+      const queue = blobs.slice(0, MAX_FILES);
       const dirs = /* @__PURE__ */ new Set();
-      let imported = 0, skipped = 0;
+      let imported = 0, failed = 0;
       let done = 0;
-      const queue = [...blobs];
-      const workers = Array.from({ length: MAX_CONCURRENT }, async () => {
+      const BATCH = 6;
+      const workers = Array.from({ length: BATCH }, async () => {
         for (; ; ) {
           const node = queue.shift();
           if (!node) {
@@ -630,7 +652,7 @@ async function importFromGithub(writeFile, ensureDir, reveal) {
             await writeFile(node.path, contents);
             imported++;
           } catch (err) {
-            skipped++;
+            failed++;
             console.warn(`[webide-dev] blob fetch failed for ${node.path}:`, err);
           }
           done++;
@@ -642,7 +664,7 @@ async function importFromGithub(writeFile, ensureDir, reveal) {
       await Promise.all(workers);
       await reveal(`${owner}-${repo}`);
       vscode3.window.showInformationMessage(
-        `Imported ${imported} files from ${owner}/${repo}` + (skipped ? ` \u2014 skipped ${skipped} (failed or oversized)` : "") + "."
+        `Imported ${imported} files from ${owner}/${repo}` + (failed ? ` \u2014 ${failed} failed` : "") + ". node_modules and build artifacts were skipped."
       );
     } catch (err) {
       vscode3.window.showErrorMessage(`GitHub import failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -660,7 +682,7 @@ function base64ToBytes(b64) {
 
 // src/folderUpload.ts
 var vscode4 = __toESM(require("vscode"));
-var IGNORE_DIRS2 = /* @__PURE__ */ new Set([
+var IGNORE_DIRS = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
   ".github",
@@ -686,7 +708,7 @@ async function copyDir(src, destPath, writeFile, ensureDir, onProgress) {
   await ensureDir(destPath);
   for (const [name, type] of entries) {
     if (type === vscode4.FileType.Directory) {
-      if (IGNORE_DIRS2.has(name)) {
+      if (IGNORE_DIRS.has(name)) {
         continue;
       }
       copied += await copyDir(vscode4.Uri.joinPath(src, name), `${destPath}/${name}`, writeFile, ensureDir, onProgress);
@@ -800,24 +822,40 @@ var RunOnceTerminal = class {
 async function activate(_context) {
   const config = vscode5.workspace.getConfiguration("webide-dev");
   const runtimeUrl = config.get("runtimeUrl", "/nodine/supervisor.mjs");
-  const readyPromise = (async () => {
-    if (!isCrossOriginIsolated()) {
-      return null;
+  let readyPromise = null;
+  const ensureRuntime = () => {
+    if (!readyPromise) {
+      readyPromise = (async () => {
+        if (!isCrossOriginIsolated()) {
+          vscode5.window.showErrorMessage(
+            "Dev environment needs a cross-origin isolated host: the server must send Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: credentialless headers."
+          );
+          return null;
+        }
+        try {
+          const container = await bootContainer(runtimeUrl);
+          const provider = new NodineFileSystemProvider(container);
+          _context.subscriptions.push(vscode5.workspace.registerFileSystemProvider("nodine", provider, { isCaseSensitive: true }));
+          return container;
+        } catch (err) {
+          console.error("[webide-dev] runtime boot failed:", err);
+          readyPromise = null;
+          vscode5.window.showErrorMessage(`Dev environment boot failed: ${err instanceof Error ? err.message : err}`);
+          return null;
+        }
+      })();
     }
-    try {
-      const container = await bootContainer(runtimeUrl);
-      const provider = new NodineFileSystemProvider(container);
-      _context.subscriptions.push(vscode5.workspace.registerFileSystemProvider("nodine", provider, { isCaseSensitive: true }));
-      await openNodineWorkspace(container);
-      return container;
-    } catch (err) {
-      console.error("[webide-dev] runtime boot failed:", err);
-      vscode5.window.showWarningMessage(`Dev environment boot failed: ${err instanceof Error ? err.message : err}. Terminal and imports are unavailable.`);
-      return null;
+    return readyPromise;
+  };
+  const openNodineWorkspaceOnce = async () => {
+    const existing = vscode5.workspace.workspaceFolders?.find((f) => f.uri.scheme === "nodine");
+    if (existing) {
+      return;
     }
-  })();
+    await openNodineWorkspace(await ensureRuntime());
+  };
   const getFs = async () => {
-    const container = await readyPromise;
+    const container = await ensureRuntime();
     if (!container) {
       return null;
     }
@@ -840,17 +878,44 @@ async function activate(_context) {
     await vscode5.commands.executeCommand("revealInExplorer", vscode5.Uri.parse("nodine:/"));
     vscode5.commands.executeCommand("workbench.view.explorer");
   };
+  const collectGithubInputs = async () => {
+    const repoInput = await vscode5.window.showInputBox({
+      prompt: "GitHub repository \u2014 paste the URL or owner/repo",
+      placeHolder: "https://github.com/owner/repo (add #branch for a specific branch)",
+      ignoreFocusOut: true
+    });
+    if (!repoInput) {
+      return null;
+    }
+    const tokenInput = await vscode5.window.showInputBox({
+      prompt: "GitHub PAT \u2014 optional for public repos, required for private repos",
+      placeHolder: "github_pat_\u2026 or ghp_\u2026 (kept for this session only, empty for public)",
+      password: true,
+      ignoreFocusOut: true
+    });
+    if (tokenInput === void 0) {
+      return null;
+    }
+    return { repoInput, tokenInput };
+  };
   _context.subscriptions.push(
     vscode5.commands.registerCommand("webide-dev.createTerminal", () => {
       createDevTerminal(_context);
     }),
     vscode5.commands.registerCommand("webide-dev.importGithub", async () => {
+      const inputs = await collectGithubInputs();
+      if (!inputs) {
+        return;
+      }
       const fs = await getFs();
       if (!fs) {
         vscode5.window.showErrorMessage("Dev environment is not running (needs cross-origin isolated host with the nodine runtime).");
         return;
       }
-      await importFromGithub(fs.writeFile, fs.ensureDir, reveal);
+      await importFromGithub(inputs, fs.writeFile, fs.ensureDir, async (name) => {
+        await openNodineWorkspaceOnce();
+        await reveal(name);
+      });
     }),
     vscode5.commands.registerCommand("webide-dev.uploadFolder", async () => {
       const fs = await getFs();
@@ -858,7 +923,10 @@ async function activate(_context) {
         vscode5.window.showErrorMessage("Dev environment is not running (needs cross-origin isolated host with the nodine runtime).");
         return;
       }
-      await uploadFolder(fs.writeFile, fs.ensureDir, reveal);
+      await uploadFolder(fs.writeFile, fs.ensureDir, async (name) => {
+        await openNodineWorkspaceOnce();
+        await reveal(name);
+      });
     }),
     vscode5.commands.registerCommand("webide-dev.runFile", async (uri) => {
       const target = uri ?? vscode5.window.activeTextEditor?.document.uri;

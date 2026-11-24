@@ -26,7 +26,6 @@ Branded with the Nodine logo (mark + `#61E925`); the workbench theme is untouche
 ```
 vscode/                  FULL VS Code source tree (this repo is self-contained: clone & build)
   └─ extensions/webide-dev/   our dev-environment extension (terminal, nodine, githubImport, folderUpload)
-patches/                 diff of vscode/ vs upstream microsoft/vscode (review what we changed)
 extensions-webide-dev/   mirror of the extension source at top level (browse without entering vscode/)
 vscode-web/              BUILT static site — deploy this directory as-is
 assets/                  Nodine brand assets (logo svg/png, text logo)
@@ -34,21 +33,23 @@ scripts/                 build glue (static_fill, make_nodine_icons, snapshot) +
 docs/                    deploy guide + screenshots
 ```
 
-`vscode/` contains our modifications **applied** (it builds as-is); `patches/web-only-lightweight-build.diff`
-is regenerated for review whenever the source changes. `node_modules` is gitignored — install with pnpm.
+`vscode/` IS the product: our modifications live directly in the source (search for
+`// nodine:` comments). There is no patch file — clone, `pnpm install`, `bash build.sh`.
+`node_modules` is gitignored — dependencies (incl. `@amplytic/nodine`) install with pnpm.
 
 ## Build
 
 ```bash
 git clone https://github.com/Amplytic-Labs/web-ide.git && cd web-ide
-cd vscode && pnpm install        # ~3.6G node_modules (gitignored)
-cd .. && bash build.sh           # gulp vscode-web → vscode-web/, then fills index.html + Nodine icons
+cd vscode && pnpm install        # node_modules (gitignored) incl. @amplytic/nodine from npm
+bash ../build.sh                 # gulp vscode-web -> vscode-web/, then icons + nodine staging
 ```
 
-`build.sh` applies the patch if the tree is pristine, builds with
-`VSCODE_WEB_NO_SOURCEMAPS=1` (memory-constrained: sequential bundling, no sourcemaps),
-runs `scripts/static_fill.py` (serverless HTML fill) and `scripts/make_nodine_icons.py`
-(favicon + PWA icons from `assets/Nodine-logo.svg`).
+`build.sh` builds with `VSCODE_WEB_NO_SOURCEMAPS=1` (memory-constrained: sequential
+bundling, no sourcemaps), then runs `scripts/static_fill.py` (serverless HTML fill),
+`scripts/make_nodine_icons.py` (favicon + PWA icons from `assets/Nodine-logo.svg`) and
+`scripts/stage-nodine.mjs` (copies the nodine runtime out of `node_modules/@amplytic/nodine`
+into `vscode-web/nodine/`).
 
 Serve locally (COOP/COEP headers are required for Nodine):
 
