@@ -330,17 +330,40 @@
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon:not(.codicon) {
-	/* transparent, exactly like the source SVG — only visible on dark titlebars,
-	   which is the default (dark) theme of this product */
-	background-image: url('../../../media/nodine-text-logo.svg');
-	background-repeat: no-repeat;
-	background-position: left center;
-	background-size: contain;
+	/* nodine: transparent-bg text logo (mark + wordmark). Rendered as a CSS
+	   mask tinted with the theme foreground so it stays visible on BOTH light
+	   and dark titlebars (the SVG itself is white-fill). */
+	-webkit-mask-image: url('../../../media/nodine-text-logo.svg');
+	mask-image: url('../../../media/nodine-text-logo.svg');
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: left center;
+	mask-position: left center;
+	-webkit-mask-size: contain;
+	mask-size: contain;
+	background-color: var(--vscode-titleBar-activeForeground, #cccccc);
 	margin-left: 8px;
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon.codicon {
 	line-height: 30px;
+}
+
+/* nodine: when the activity bar is on TOP, the layout reads as one app row —
+   put the compact hamburger menu BEFORE the logo (<burger> <logo>) instead
+   of the desktop order (<logo> <burger>). The workbench gets the
+   activitybar-position-top class from layout.ts. */
+.monaco-workbench.activitybar-position-top .part.titlebar > .titlebar-container > .titlebar-left > .menubar {
+	order: 0; /* hamburger first */
+	margin-left: 8px;
+}
+
+.monaco-workbench.activitybar-position-top .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {
+	order: 1; /* logo after the burger */
+}
+
+.monaco-workbench.activitybar-position-top .part.titlebar > .titlebar-container > .titlebar-left > .window-controls-container {
+	order: 2; /* window controls stay last */
 }
 
 .monaco-workbench.fullscreen .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {

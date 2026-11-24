@@ -57,6 +57,29 @@ export function getProjectCwd(): string | null {
 }
 
 export async function activate(_context: vscode.ExtensionContext): Promise<void> {
+	// Context key: true while no nodine project is loaded — drives the
+	// explorer "Dev Environment" welcome view visibility.
+	const syncNoProject = () => {
+		const loaded = vscode.workspace.workspaceFolders?.some(f => f.uri.scheme === 'nodine') ?? false;
+		vscode.commands.executeCommand('setContext', 'webide-dev.noProject', !loaded);
+	};
+	syncNoProject();
+	_context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(syncNoProject));
+
+	// The "Dev Environment" tree view: always empty, so its viewsWelcome
+	// content (Upload / Import / Terminal buttons) is always rendered.
+	const tree = vscode.window.createTreeView('webide-dev.welcome', {
+		treeDataProvider: {
+			getChildren: () => [],
+			getTreeItem: () => ({ label: '' } as vscode.TreeItem),
+		},
+	});
+	_context.subscriptions.push(tree);
+	// expand the section on first activation so the action buttons are visible
+	tree.description = 'Upload · Import · Terminal';
+	// focusing the view also expands its section (fresh profiles collapse it)
+	setTimeout(() => { vscode.commands.executeCommand('webide-dev.welcome.focus').then(() => undefined, () => undefined); }, 1500);
+
 	const config = vscode.workspace.getConfiguration('webide-dev');
 	const runtimeUrl = config.get<string>('runtimeUrl', '/nodine/supervisor.mjs');
 

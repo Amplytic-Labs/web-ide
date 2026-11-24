@@ -159,7 +159,11 @@ export async function importFromGithub(
 						console.warn(`[webide-dev] blob fetch failed for ${node.path}:`, err);
 					}
 					done++;
-					if (done % 20 === 0) { progress.report({ message: `${done}/${blobs.length} files…` }); }
+					const total = Math.min(blobs.length, MAX_FILES);
+					if (done % (total < 50 ? 1 : 10) === 0 || done === total) {
+						const pct = total > 0 ? Math.round((done / total) * 100) : 100;
+						progress.report({ message: `${done}/${total} files · ${pct}%`, increment: 100 / total });
+					}
 				}
 			});
 			await Promise.all(workers);

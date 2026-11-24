@@ -706,8 +706,24 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		// Menubar visibility
 		this.updateMenubarVisibility(!!skipLayout);
 
+		// nodine: keep the activitybar-position-* class in sync (titlebar CSS
+		// uses it to reorder menu-before-logo when the activity bar is on top)
+		this.updateActivityBarPositionClass();
+
 		// Centered Layout
 		this.editorGroupService.whenRestored.then(() => this.centerMainEditorLayout(this.stateModel.getRuntimeValue(LayoutStateKeys.MAIN_EDITOR_CENTERED), skipLayout));
+	}
+
+	private updateActivityBarPositionClass(): void {
+		const location = this.configurationService.getValue<ActivityBarPosition>(LayoutSettings.ACTIVITY_BAR_LOCATION);
+		for (const container of Array.from(this.containers)) {
+			for (const cls of Array.from(container.classList)) {
+				if (cls.startsWith('activitybar-position-')) {
+					container.classList.remove(cls);
+				}
+			}
+			container.classList.add(`activitybar-position-${location}`);
+		}
 	}
 
 	private isShadowsDisabled(): boolean {
@@ -2067,6 +2083,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	}
 
 	getLayoutClasses(): string[] {
+		// nodine: expose the activity bar location so CSS can restyle the top
+		// row (menu-before-logo ordering in the titlebar) — see titlebarpart.css
+		const activityBarLocation = this.configurationService.getValue<ActivityBarPosition>(LayoutSettings.ACTIVITY_BAR_LOCATION);
 		return coalesce([
 			!this.isVisible(Parts.SIDEBAR_PART) ? LayoutClasses.SIDEBAR_HIDDEN : undefined,
 			!this.isVisible(Parts.EDITOR_PART, mainWindow) ? LayoutClasses.MAIN_EDITOR_AREA_HIDDEN : undefined,
@@ -2082,6 +2101,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			this.isFloatingPanelsEnabled() ? LayoutClasses.MODERN_UI : undefined,
 			this.isModernUICompact() ? LayoutClasses.MODERN_UI_COMPACT : undefined,
 			this.isFloatingPanelsEnabled() ? LayoutClasses.MODERN_UI_TABS : undefined,
+			`activitybar-position-${activityBarLocation}`,
 			`panel-position-${positionToString(this.getPanelPosition())}`,
 			`panel-alignment-${this.getPanelAlignment()}`
 		]);

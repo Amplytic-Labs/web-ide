@@ -79,6 +79,24 @@
           "description": "Optional GitHub PAT (raises rate limits, enables private repos)"
         }
       }
+    },
+    "viewsWelcome": [
+      {
+        "view": "webide-dev.welcome",
+        "contents": "Bring a project into the dev environment \u2014 real Node.js in your browser.\n[Upload Folder](command:webide-dev.uploadFolder)\n[Import from GitHub...](command:webide-dev.importGithub)\n[Open Dev Terminal](command:webide-dev.createTerminal)",
+        "when": "webide-dev.noProject"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "webide-dev.welcome",
+          "name": "Dev Environment",
+          "when": "webide-dev.noProject",
+          "order": 0,
+          "visibility": "visible"
+        }
+      ]
     }
   }
 }
