@@ -337,3 +337,30 @@ export function focusDevTerminal(context: vscode.ExtensionContext): vscode.Termi
 	terminal.show();
 	return terminal;
 }
+
+/**
+ * Terminal profile provider for the manifest's `terminal.profiles` entry
+ * (id "webide-dev.nodine"). Registering the provider is what makes the
+ * profile usable as the DEFAULT terminal: without it the profile appears
+ * in the picker but creating fails with "No terminal profile provider
+ * registered". Every default terminal (+ button, Ctrl+`, "Terminal:
+ * Create New Terminal") resolves through here in this static web build,
+ * because no local process support exists.
+ *
+ * The workbench creates the terminal FROM the returned profile: it must
+ * carry a pty, which wires the instance to our nodine runtime directly.
+ */
+export class NodineProfileProvider implements vscode.TerminalProfileProvider {
+	private readonly runtimeUrl: string;
+
+	constructor(runtimeUrl: string) {
+		this.runtimeUrl = runtimeUrl;
+	}
+
+	provideTerminalProfile(_token: vscode.CancellationToken): vscode.ProviderResult<vscode.TerminalProfile> {
+		const pty = new NodineTerminal(this.runtimeUrl);
+		// start in the project folder if one was uploaded/imported before
+		pty.cd(getProjectCwd() ?? '');
+		return { name: 'node (nodine)', options: { pty } };
+	}
+}

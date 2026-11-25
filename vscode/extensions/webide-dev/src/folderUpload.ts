@@ -17,6 +17,14 @@ import * as vscode from 'vscode';
  *  3. Copy every file into the nodine container (bolt.diy-style ignore
  *     rules and size caps) with LIVE progress: file count, skipped count
  *     and percentage in a notification.
+ *
+ * THE PICKER MUST BE THE FIRST AWAIT. showDirectoryPicker (and the
+ * webkitdirectory fallback) require the browser's transient user
+ * activation, which expires ~5s after the "Upload Folder" click. Booting
+ * the runtime first (seconds to ~40s) let it expire, the browser rejected
+ * the picker, VS Code swallowed the error and the command silently did
+ * nothing. The runtime is booted only AFTER a folder is picked, under a
+ * progress notification.
  */
 
 const IGNORE_DIRS = new Set([
@@ -98,7 +106,12 @@ export async function uploadFolder(
 	writeFile: (path: string, contents: Uint8Array) => Promise<void>,
 	ensureDir: (path: string) => Promise<void>,
 	reveal: (folderName: string) => Promise<void>,
+	/** Called after the picker succeeds, before any file is read — boot the runtime here. */
+	prepareRuntime: () => Promise<void>,
 ): Promise<void> {
+	// FIRST await: the browser's native picker needs the still-live user
+	// activation from the "Upload Folder" click. Anything slow before this
+	// (runtime boot) makes the picker fail with a swallowed SecurityError.
 	const picked = await vscode.window.showOpenDialog({
 		canSelectFiles: false,
 		canSelectFolders: true,
@@ -118,6 +131,9 @@ export async function uploadFolder(
 		cancellable: false,
 	}, async progress => {
 		try {
+			progress.report({ message: 'booting dev environment…' });
+			await prepareRuntime(); // may take seconds to ~40s on a cold start
+
 			progress.report({ message: 'scanning files…' });
 			const stats: CopyStats = { copied: 0, skipped: 0 };
 			const total = await countFiles(root, stats);

@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import { bootContainer, getContainer, isCrossOriginIsolated, type NodineContainer } from './nodine';
 import { NodineFileSystemProvider, openNodineWorkspace } from './fsProvider';
-import { createDevTerminal, focusDevTerminal } from './terminal';
+import { createDevTerminal, focusDevTerminal, NodineProfileProvider } from './terminal';
 import { importFromGithub } from './githubImport';
 import { uploadFolder } from './folderUpload';
 
@@ -83,6 +83,15 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 	const config = vscode.workspace.getConfiguration('webide-dev');
 	const runtimeUrl = config.get<string>('runtimeUrl', '/nodine/supervisor.mjs');
 
+	// AUTO WORKSPACE: the IDE boots straight into the "nodine" workspace —
+	// the explorer shows the container root and every terminal/runner is
+	// linked to it. The runtime boots lazily underneath (the fs provider
+	// reads resolve once it is up); no upload or import is needed to run
+	// code — the user can scaffold a project with npm/create-* in the
+	// terminal, or import/upload into the already-open workspace.
+	// (Placed after the openNodineWorkspaceOnce declaration — these are
+	// consts, and calling one before its line runs hits the TDZ.)
+
 	// LAZY BOOT: nothing happens on startup. The runtime boots on the first
 	// command that needs it — Create Dev Terminal, Import from GitHub or
 	// Upload Folder. A fresh start shows the plain welcome page, no boot
@@ -146,6 +155,29 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		await openNodineWorkspace(await ensureRuntime() as NodineContainer);
 	};
 
+	// AUTO WORKSPACE (see comment at the top of activate): open the nodine
+	// workspace right away so the explorer + terminals start in it.
+	openNodineWorkspaceOnce().then(() => {
+		// Make the Nodine profile the DEFAULT terminal — AFTER the workspace
+		// exists (a Workspace-target update with no open workspace fails with
+		// "no workspace is opened"). Without a default, the workbench's
+		// generic terminal creation has no profile to use (no local process
+		// support in a static web build) and silently does nothing; with it,
+		// +, Ctrl+` and palette creation all route to the nodine pty.
+		const setDefaultProfile = (target: vscode.ConfigurationTarget) =>
+			Promise.allSettled([
+				vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.linux', 'Nodine (Node.js)', target),
+				vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.osx', 'Nodine (Node.js)', target),
+			]);
+		void setDefaultProfile(vscode.ConfigurationTarget.Workspace).then(results => {
+			const failed = results.some(r => r.status === 'rejected');
+			if (failed) {
+				// empty/failed workspace write → user-level default instead
+				void setDefaultProfile(vscode.ConfigurationTarget.Global);
+			}
+		});
+	});
+
 	// Upload / GitHub import write the project at the CONTAINER ROOT
 	// (/<folderName>, not nested in the workdir), so after upload the
 	// workspace root IS the project — exactly like WebContainer's mount().
@@ -165,6 +197,14 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 				await container.fs.mkdir(`/${p}`, { recursive: true }).catch(() => { });
 			},
 		};
+	};
+
+	// Like getFs() but throws a readable error instead of returning null —
+	// used inside uploadFolder's progress block after the pick succeeded.
+	const requireFs = async () => {
+		const fs = await getFs();
+		if (!fs) { throw new Error('Dev environment is not running (needs cross-origin isolated host with the nodine runtime).'); }
+		return fs;
 	};
 
 	const reveal = async (_folderName: string) => {
@@ -208,6 +248,21 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 			createDevTerminal(_context);
 		}),
 
+		// Terminal-profile entry point: invoked by the workbench whenever a
+		// DEFAULT terminal is created (the + button, Ctrl+`, menu) because
+		// this profile is the only shell in the static web build — no local
+		// process support exists. Falls through to the same nodine-backed
+		// pseudoterminal the "Create Dev Terminal" command uses.
+		vscode.commands.registerCommand('webide-dev.createNodineTerminal', () => {
+			return focusDevTerminal(_context);
+		}),
+
+		// The profile PROVIDER: without this registration the manifest's
+		// terminal profile shows in the picker but cannot create terminals.
+		// The workbench creates default terminals from the returned profile
+		// (which carries our nodine-backed pty).
+		vscode.window.registerTerminalProfileProvider('webide-dev.nodine', new NodineProfileProvider(runtimeUrl)),
+
 		vscode.commands.registerCommand('webide-dev.importGithub', async () => {
 			// Ask for input FIRST (the boot takes ~40s; asking first means no
 			// silent wait), then boot + import.
@@ -222,12 +277,16 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		}),
 
 		vscode.commands.registerCommand('webide-dev.uploadFolder', async () => {
-			const fs = await getFs();
-			if (!fs) {
-				vscode.window.showErrorMessage('Dev environment is not running (needs cross-origin isolated host with the nodine runtime).');
-				return;
-			}
-			await uploadFolder(fs.writeFile, fs.ensureDir, projectReady);
+			// The picker runs FIRST (its native dialog needs the live user
+			// activation from this click); the runtime boots after the pick,
+			// inside the progress notification. Booting first let the
+			// activation expire and the picker fail silently.
+			await uploadFolder(
+				async (p, c) => (await requireFs()).writeFile(p, c),
+				async (p) => (await requireFs()).ensureDir(p),
+				projectReady,
+				async () => { await requireFs(); },
+			);
 		}),
 
 		vscode.commands.registerCommand('webide-dev.runFile', async (uri?: vscode.Uri) => {

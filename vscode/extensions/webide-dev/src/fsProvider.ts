@@ -188,7 +188,7 @@ export async function openNodineWorkspace(_container: NodineContainer): Promise<
 	if (already) { return; }
 	// swap every current folder for the nodine root, in place
 	const ok = vscode.workspace.updateWorkspaceFolders(
-		0, existing?.length ?? 0, { uri: folderUri, name: 'nodine' });
+		0, existing?.length ?? 0, { uri: folderUri, name: 'Nodine' });
 	if (!ok) {
 		console.error('[webide-dev] updateWorkspaceFolders returned false (workspace change rejected)');
 	}
