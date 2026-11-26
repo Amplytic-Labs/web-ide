@@ -42,9 +42,9 @@ export interface NodineContainer {
 	readonly baseEnv: Record<string, string>;
 	readonly fs: FileSystemAPI;
 	mount(tree: FileSystemTree): Promise<void>;
-	spawn(command: string, args?: string[], options?: { cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number } }): Promise<ContainerProcess>;
+	spawn(command: string, args?: string[], options?: { cwd?: string; env?: Record<string, string>; stdio?: 'inherit' | 'pipe'; terminal?: { cols: number; rows: number } }): Promise<ContainerProcess>;
 	on(event: 'server-ready' | 'port' | 'error' | 'preview-message', listener: (...args: any[]) => void): () => void;
-	onOutput(fn: (chunk: Uint8Array) => void): () => void;
+	onOutput(fn: (chunk: Uint8Array | string) => void): () => void;
 	previewUrl(port: number): string;
 	teardown(): Promise<void>;
 }

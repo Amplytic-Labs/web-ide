@@ -336,6 +336,12 @@ var NodineTerminal = class {
     __publicField(this, "container", null);
     __publicField(this, "current", null);
     __publicField(this, "inputWriter", null);
+    /** true when the foreground process was spawned stdio:inherit (tree output via onOutput, stdin via __sup.sendStdin). */
+    __publicField(this, "inheritSpawn", false);
+    __publicField(this, "outSub", null);
+    __publicField(this, "outDecoder", null);
+    /** epoch ms until which late tty chunks are still accepted — the driver drains the kernel tty FIFO on a 50 ms timer, so a fast command's output can land AFTER exit (running already false). */
+    __publicField(this, "acceptUntil", 0);
     __publicField(this, "buffer", "");
     __publicField(this, "running", false);
     /** cwd for spawned commands — starts at the container root (Explorer root). */
@@ -407,6 +413,14 @@ var NodineTerminal = class {
       this.closeEmitter.fire(1);
       return;
     }
+    this.outDecoder = new TextDecoder();
+    this.outSub = this.container.onOutput((chunk) => {
+      if (!this.running && Date.now() > this.acceptUntil) {
+        return;
+      }
+      const text = typeof chunk === "string" ? chunk : this.outDecoder.decode(chunk, { stream: true });
+      this.write(text);
+    });
     const version = await this.nodeVersion();
     this.clearScreen();
     if (version) {
@@ -487,37 +501,58 @@ var NodineTerminal = class {
     this.cwd = next.replace(/\/+$/, "") || "/";
     this.prompt();
   }
+  /**
+   * The supervisor's terminal-owner stdin FIFO (`__sup.sendStdin`) — the
+   * same surface the old Nodine site used for interactive prompts. Routes
+   * to the supervisor's FOREGROUND process at any tree depth (the SDK's
+   * proc.input only exists for piped spawns and only reaches the root),
+   * and converts a leading \x03 into SIGINT for the whole tree.
+   */
+  supStdin() {
+    const sup = this.container.__sup;
+    if (sup?.sendStdin && sup.foreground && !sup.foreground.exited) {
+      return (bytes) => {
+        try {
+          sup.sendStdin(bytes);
+        } catch {
+        }
+      };
+    }
+    return null;
+  }
   handleInput(data) {
     if (!this.container) {
       return;
     }
     if (this.running) {
       if (data.includes("")) {
-        if (this.inputWriter) {
-          void this.inputWriter.write("");
+        const sup = this.supStdin();
+        if (sup) {
+          sup(new Uint8Array([3]));
+        } else {
+          if (this.inputWriter) {
+            void this.inputWriter.write("");
+          }
+          try {
+            void this.current?.kill();
+          } catch {
+          }
         }
         this.write("^C\r\n");
         this.atLineStart = true;
-        try {
-          void this.current?.kill();
-        } catch {
-        }
         return;
       }
-      if (this.inputWriter) {
-        for (const ch of data) {
+      for (const ch of data) {
+        const feed = this.inheritSpawn ? this.supStdin() : null;
+        const bytes = new TextEncoder().encode(ch);
+        if (feed) {
+          feed(bytes);
+        } else if (this.inputWriter) {
           if (ch === "\r") {
             this.writeEmitter.fire("\r\n");
-            void this.inputWriter.write("\r");
-          } else {
-            void this.inputWriter.write(ch);
           }
+          void this.inputWriter.write(ch);
         }
-        return;
-      }
-      if (!this.stdinHintShown) {
-        this.stdinHintShown = true;
-        this.write("\x1B[90m(program running \u2014 Ctrl+C to stop)\x1B[0m\r\n");
       }
       return;
     }
@@ -629,26 +664,27 @@ var NodineTerminal = class {
         env: { ...container.baseEnv }
       });
       this.current = proc;
+      this.inheritSpawn = false;
       return await this.pump(proc, container);
     }
     try {
       let proc;
+      const spawnOpts = {
+        cwd: this.resolveCwd(container),
+        env: { ...container.baseEnv, ...argv[0] === "npm" || argv[0] === "npx" ? { npm_config_progress: "false", npm_config_loglevel: "info" } : {} },
+        stdio: redirect ? "pipe" : "inherit"
+      };
       if (argv[0] === "node") {
         if (argv.length === 1) {
           this.write('\x1B[90musage: node <file.js> \xB7 node -v \xB7 node -e "<code>"\x1B[0m\r\n');
           return 0;
         }
-        proc = await container.spawn("node", argv.slice(1), {
-          cwd: this.resolveCwd(container),
-          env: { ...container.baseEnv }
-        });
+        proc = await container.spawn("node", argv.slice(1), spawnOpts);
       } else {
-        proc = await container.spawn(argv[0], argv.slice(1), {
-          cwd: this.resolveCwd(container),
-          env: { ...container.baseEnv, ...argv[0] === "npm" || argv[0] === "npx" ? { npm_config_progress: "false", npm_config_loglevel: "info" } : {} }
-        });
+        proc = await container.spawn(argv[0], argv.slice(1), spawnOpts);
       }
       this.current = proc;
+      this.inheritSpawn = !redirect;
       this.inputWriter = proc.input ? proc.input.getWriter() : null;
       return await this.pump(proc, container, redirect);
     } catch (err) {
@@ -722,6 +758,9 @@ var NodineTerminal = class {
     this.running = false;
     this.current = null;
     this.stdinHintShown = false;
+    this.inheritSpawn = false;
+    this.acceptUntil = Date.now() + 600;
+    this.flushOut();
     if (this.inputWriter) {
       try {
         void this.inputWriter.close();
@@ -734,11 +773,23 @@ var NodineTerminal = class {
       afterCommandHook?.();
     } catch {
     }
-    this.prompt();
+    setTimeout(() => {
+      this.flushOut();
+      if (this.container) {
+        this.prompt();
+      }
+    }, 160);
   }
   setDimensions(_dimensions) {
   }
   async close() {
+    if (this.outSub) {
+      try {
+        this.outSub();
+      } catch {
+      }
+      this.outSub = null;
+    }
     if (this.inputWriter) {
       try {
         await this.inputWriter.close();

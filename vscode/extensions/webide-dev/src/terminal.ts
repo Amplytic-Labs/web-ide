@@ -45,6 +45,12 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	private container: NodineContainer | null = null;
 	private current: ContainerProcess | null = null;
 	private inputWriter: WritableStreamDefaultWriter<string> | null = null;
+	/** true when the foreground process was spawned stdio:inherit (tree output via onOutput, stdin via __sup.sendStdin). */
+	private inheritSpawn = false;
+	private outSub: (() => void) | null = null;
+	private outDecoder: TextDecoder | null = null;
+	/** epoch ms until which late tty chunks are still accepted — the driver drains the kernel tty FIFO on a 50 ms timer, so a fast command's output can land AFTER exit (running already false). */
+	private acceptUntil = 0;
 	private buffer = '';
 	private running = false;
 	/** cwd for spawned commands — starts at the container root (Explorer root). */
@@ -116,6 +122,21 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			this.closeEmitter.fire(1);
 			return;
 		}
+		// inherit-mode processes write to the container's SHARED output stream
+		// (the kernel's virtual tty — proc.output stays empty for them). Pump
+		// it into xterm while THIS terminal has a foreground job; the gate
+		// keeps other terminals' output off this pane (terminals share one
+		// container, like bolt.diy's share one WebContainer).
+		this.outDecoder = new TextDecoder();
+		// the SDK's terminal sink delivers DECODED TEXT (strings) — the driver
+		// posts streaming-decoded chunks; a Uint8Array path is kept for older
+		// bundles. A decode-on-string TypeError is swallowed by the sink's
+		// try/catch (output silently vanishes — the bug this fixes).
+		this.outSub = this.container.onOutput((chunk) => {
+			if (!this.running && Date.now() > this.acceptUntil) { return; }
+			const text = typeof chunk === 'string' ? chunk : this.outDecoder!.decode(chunk, { stream: true });
+			this.write(text);
+		});
 		const version = await this.nodeVersion();
 		// clean terminal: wipe the boot status, show just the version
 		this.clearScreen();
@@ -189,43 +210,67 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		this.prompt();
 	}
 
+	/**
+	 * The supervisor's terminal-owner stdin FIFO (`__sup.sendStdin`) — the
+	 * same surface the old Nodine site used for interactive prompts. Routes
+	 * to the supervisor's FOREGROUND process at any tree depth (the SDK's
+	 * proc.input only exists for piped spawns and only reaches the root),
+	 * and converts a leading \x03 into SIGINT for the whole tree.
+	 */
+	private supStdin(): ((bytes: Uint8Array) => void) | null {
+		const sup = (this.container as unknown as {
+			__sup?: {
+				sendStdin?: (bytes: Uint8Array) => void;
+				foreground?: { exited?: boolean } | null;
+			};
+		} | null).__sup;
+		if (sup?.sendStdin && sup.foreground && !sup.foreground.exited) {
+			return (bytes) => { try { sup.sendStdin!(bytes); } catch { /* process gone */ } };
+		}
+		return null;
+	}
+
 	handleInput(data: string): void {
 		if (!this.container) { return; }
 
 		// a foreground process owns the terminal
 		if (this.running) {
-			// Ctrl+C terminates the foreground job (SIGINT semantics) — also
-			// fed through stdin so prompt libraries can exit gracefully
+			// Ctrl+C: SIGINT for the whole foreground TREE. The supervisor's
+			// sendStdin converts a leading \x03 into SIGINT (real tty line
+			// discipline) — kill() on the root alone would leave grandchildren
+			// (create-expo-app's npm install) running.
 			if (data.includes('\u0003')) {
-				if (this.inputWriter) { void this.inputWriter.write('\u0003'); }
+				const sup = this.supStdin();
+				if (sup) {
+					sup(new Uint8Array([0x03]));
+				} else {
+					if (this.inputWriter) { void this.inputWriter.write('\u0003'); }
+					try { void this.current?.kill(); } catch { /* already gone */ }
+				}
 				this.write('^C\r\n');
 				this.atLineStart = true;
-				try { void this.current?.kill(); } catch { /* already gone */ }
 				return;
 			}
-			if (this.inputWriter) {
-				// forward bytes RAW and do NOT echo: the kernel presents the
-				// process with a TTY (isTTY true), so prompt libraries render
-				// their own input — clack redraws its frame, npm's `read`
-				// echoes each key. A terminal-side echo would interleave with
-				// those redraws (doubled chars, text past the placeholder).
-				// Enter stays \r: clack submits on the 'return' keypress; node
-				// readline treats a lone \r as a line ending too.
-				for (const ch of data) {
-					if (ch === '\r') {
-						this.writeEmitter.fire('\r\n'); // cursor feedback only
-						void this.inputWriter.write('\r');
-					} else {
-						void this.inputWriter.write(ch);
-					}
+			// forward bytes RAW and do NOT echo: the kernel presents the
+			// process with a TTY (isTTY true), so prompt libraries render
+			// their own input — clack redraws its frame, npm's `read`
+			// echoes each key. A terminal-side echo would interleave with
+			// those redraws (doubled chars, text past the placeholder).
+			// Enter stays \r: clack submits on the 'return' keypress; node
+			// readline treats a lone \r as a line ending too.
+			// inherit-mode spawns have no proc.input (the SDK exposes stdin
+			// only for piped spawns) — feed the supervisor's terminal-owner
+			// FIFO instead: it routes to the foreground process WHATEVER its
+			// depth (create-expo-app's name prompt, npm's children).
+			for (const ch of data) {
+				const feed = this.inheritSpawn ? this.supStdin() : null;
+				const bytes = new TextEncoder().encode(ch);
+				if (feed) {
+					feed(bytes);
+				} else if (this.inputWriter) {
+					if (ch === '\r') { this.writeEmitter.fire('\r\n'); } // cursor feedback only
+					void this.inputWriter.write(ch);
 				}
-				return;
-			}
-			// running but the program never opened stdin: swallow keystrokes
-			// so they don't pile into the prompt buffer and run as commands
-			if (!this.stdinHintShown) {
-				this.stdinHintShown = true;
-				this.write('\x1b[90m(program running — Ctrl+C to stop)\x1b[0m\r\n');
 			}
 			return;
 		}
@@ -333,11 +378,23 @@ class NodineTerminal implements vscode.Pseudoterminal {
 				env: { ...container.baseEnv },
 			});
 			this.current = proc;
+			this.inheritSpawn = false; // piped: pump reads proc.output
 			return await this.pump(proc, container);
 		}
 
 		try {
 			let proc: ContainerProcess;
+			// stdio:inherit (no redirect) — CRITICAL: the kernel's piped mode
+			// drops the process tree's grandchildren from the pipe, so any
+			// command that spawns children (npx create-expo-app → npm
+			// install) STALLS: the child writes into a pipe nobody drains.
+			// Inherit attaches the whole tree to the container's shared tty
+			// stream (routed to xterm by the onOutput subscription in open()).
+			const spawnOpts = {
+				cwd: this.resolveCwd(container),
+				env: { ...container.baseEnv, ...(argv[0] === 'npm' || argv[0] === 'npx' ? { npm_config_progress: 'false', npm_config_loglevel: 'info' } : {}) },
+				stdio: redirect ? ('pipe' as const) : ('inherit' as const),
+			};
 			if (argv[0] === 'node') {
 				if (argv.length === 1) {
 					// bare `node` has no TTY-backed REPL in the kernel — show usage
@@ -345,20 +402,15 @@ class NodineTerminal implements vscode.Pseudoterminal {
 					return 0;
 				}
 				// `node <file>`, `node -v`, `node -e '<code>'` — spawn for real
-				proc = await container.spawn('node', argv.slice(1), {
-					cwd: this.resolveCwd(container),
-					env: { ...container.baseEnv },
-				});
+				proc = await container.spawn('node', argv.slice(1), spawnOpts);
 			} else {
 				// npm / npx / coreutils / anything else in the container:
 				// spawn as a real process; a missing binary fails fast
-				proc = await container.spawn(argv[0], argv.slice(1), {
-					cwd: this.resolveCwd(container),
-					env: { ...container.baseEnv, ...(argv[0] === 'npm' || argv[0] === 'npx' ? { npm_config_progress: 'false', npm_config_loglevel: 'info' } : {}) },
-				});
+				proc = await container.spawn(argv[0], argv.slice(1), spawnOpts);
 			}
 
 			this.current = proc;
+			this.inheritSpawn = !redirect;
 			this.inputWriter = proc.input ? proc.input.getWriter() : null;
 			return await this.pump(proc, container, redirect);
 		} catch (err) {
@@ -421,6 +473,14 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		this.running = false;
 		this.current = null;
 		this.stdinHintShown = false;
+		this.inheritSpawn = false;
+		// late tty chunks: the driver drains the kernel FIFO on a 50 ms timer
+		// — keep accepting for a grace window, then flush + prompt so the
+		// command's tail prints ABOVE the next prompt, not below it
+		this.acceptUntil = Date.now() + 600;
+		// drain the coalescing buffer NOW: the process's last output must
+		// reach xterm before the prompt (which fires the emitter directly)
+		this.flushOut();
 		if (this.inputWriter) {
 			try { void this.inputWriter.close(); } catch { /* closed */ }
 			this.inputWriter = null;
@@ -429,7 +489,10 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		// MAY have changed after every command so the Explorer re-reads the
 		// root listing (terminal mkdir/rm/node -e/npm writes show up live)
 		try { hookFireCount++; afterCommandHook?.(); } catch { /* hook optional */ }
-		this.prompt();
+		setTimeout(() => {
+			this.flushOut(); // drain-window tail
+			if (this.container) { this.prompt(); }
+		}, 160);
 	}
 
 	setDimensions(_dimensions: vscode.TerminalDimensions): void {
@@ -437,6 +500,10 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	}
 
 	async close(): Promise<void> {
+		if (this.outSub) {
+			try { this.outSub(); } catch { /* already gone */ }
+			this.outSub = null;
+		}
 		if (this.inputWriter) {
 			try { await this.inputWriter.close(); } catch { /* already closed */ }
 			this.inputWriter = null;
