@@ -274,6 +274,13 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 				'usr': true,
 				'.vscode': true,
 			},
+			// the + button must create a Nodine terminal DIRECTLY (no profile
+			// picker). Provider-written workspace settings DO apply (this same
+			// files.exclude hides the runtime's system dirs) — the config-
+			// service route produced a null workspace override instead.
+			'terminal.integrated.defaultProfile.linux': 'Nodine (Node.js)',
+			'terminal.integrated.defaultProfile.osx': 'Nodine (Node.js)',
+			'terminal.integrated.defaultProfile.windows': 'Nodine (Node.js)',
 		}, null, 2);
 		await vscode.workspace.fs.writeFile(settingsUri, new TextEncoder().encode(payload + '\n'));
 	};
@@ -330,27 +337,44 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 			// clean Nodine root: hide the runtime's pre-created system dirs
 			await seedExplorerSettings();
 
-			// Make the Nodine profile the DEFAULT terminal — AFTER the workspace
-			// exists (a Workspace-target update with no open workspace fails with
-			// "no workspace is opened"). Without a default, the workbench's
-			// generic terminal creation has no profile to use (no local process
-			// support in a static web build) and silently does nothing; with it,
-			// +, Ctrl+` and palette creation all route to the nodine pty.
-			const setDefaultProfile = (target: vscode.ConfigurationTarget) =>
-				Promise.allSettled([
-					vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.linux', 'Nodine (Node.js)', target),
-					vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.osx', 'Nodine (Node.js)', target),
+			// Make the Nodine profile the DEFAULT terminal. Without a default,
+			// the workbench's generic terminal creation (the + button) shows a
+			// profile picker on every click. Persist at USER level
+			// (localStorage — survives reloads); the Workspace layer is NOT
+			// used because its settings.json lives in the EPHEMERAL container
+			// FS (fresh every reload, races the provider boot) and a null
+			// override there shadowed the user value. Workspace-layer nulls
+			// are cleared so they can't shadow the user setting either.
+			// windows covers browsers on Windows, osx is VS Code's key spelling.
+			const termCfg = vscode.workspace.getConfiguration('terminal.integrated');
+			void Promise.allSettled([
+				termCfg.update('defaultProfile.linux', undefined, vscode.ConfigurationTarget.Workspace),
+				termCfg.update('defaultProfile.osx', undefined, vscode.ConfigurationTarget.Workspace),
+				termCfg.update('defaultProfile.windows', undefined, vscode.ConfigurationTarget.Workspace),
+			]).then(() => {
+				void Promise.allSettled([
+					termCfg.update('defaultProfile.linux', 'Nodine (Node.js)', vscode.ConfigurationTarget.Global),
+					termCfg.update('defaultProfile.osx', 'Nodine (Node.js)', vscode.ConfigurationTarget.Global),
+					termCfg.update('defaultProfile.windows', 'Nodine (Node.js)', vscode.ConfigurationTarget.Global),
 				]);
-			void setDefaultProfile(vscode.ConfigurationTarget.Workspace).then(results => {
-				const failed = results.some(r => r.status === 'rejected');
-				if (failed) {
-					// empty/failed workspace write → user-level default instead
-					void setDefaultProfile(vscode.ConfigurationTarget.Global);
-				}
 			});
 
 			// the terminal initiates automatically (skipped if one already exists)
 			await focusDevTerminal(_context);
+
+			// bolt.diy-style keep-alive: closing the LAST terminal (trash icon)
+			// respawns a fresh nodine terminal shortly after, so the workbench
+			// never ends up without one. A terminal that dies within 3 s of its
+			// birth is a boot crash, not a user action — do not respawn-loop.
+			const bornAt = new WeakMap<vscode.Terminal, number>();
+			_context.subscriptions.push(vscode.window.onDidOpenTerminal(t => bornAt.set(t, Date.now())));
+			_context.subscriptions.push(vscode.window.onDidCloseTerminal(t => {
+				if (vscode.window.terminals.length > 0) { return; }
+				if (Date.now() - (bornAt.get(t) ?? 0) < 3000) { return; }
+				setTimeout(() => {
+					if (vscode.window.terminals.length === 0) { createDevTerminal(_context); }
+				}, 500);
+			}));
 		} catch (err) {
 			console.error('[webide-dev] auto workspace/terminal failed:', err);
 		}
@@ -364,10 +388,11 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		// Terminal-profile entry point: invoked by the workbench whenever a
 		// DEFAULT terminal is created (the + button, Ctrl+`, menu) because
 		// this profile is the only shell in the static web build — no local
-		// process support exists. Falls through to the same nodine-backed
-		// pseudoterminal the "Create Dev Terminal" command uses.
+		// process support exists. Creates a FRESH terminal every time so
+		// multiple terminals work (the pty instances share one container,
+		// like bolt.diy's terminals share one WebContainer).
 		vscode.commands.registerCommand('webide-dev.createNodineTerminal', () => {
-			return focusDevTerminal(_context);
+			return createDevTerminal(_context);
 		}),
 
 		// The profile PROVIDER: without this registration the manifest's

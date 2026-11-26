@@ -344,6 +344,15 @@ var NodineTerminal = class {
     __publicField(this, "atLineStart", true);
     /** one-time hint shown when a running program doesn't read stdin */
     __publicField(this, "stdinHintShown", false);
+    /**
+     * Output coalescing: process output arrives as many tiny chunks (clack
+     * writes each cursor sequence separately, npm per line). Fired as-is,
+     * escape sequences split across xterm writes mis-render (stale prompt
+     * frames). Buffer for ~12 ms and fire ONE atomic chunk — a real PTY does
+     * the same, and atomic delivery is proven to render correctly.
+     */
+    __publicField(this, "outBuf", "");
+    __publicField(this, "outTimer", null);
     __publicField(this, "nodeVersionCache", null);
   }
   /** Point the shell at a project folder (e.g. "/my-app"). Silent pre-boot. */
@@ -363,12 +372,27 @@ var NodineTerminal = class {
   }
   /** All output goes through here: bare \n → \r\n (no staircase output). */
   write(data) {
-    const norm = data.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
-    this.atLineStart = norm.endsWith("\r\n") || norm.endsWith("\n");
-    this.writeEmitter.fire(norm);
+    this.outBuf += data.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+    if (this.outTimer === null) {
+      this.outTimer = setTimeout(() => this.flushOut(), 12);
+    }
+  }
+  flushOut() {
+    if (this.outTimer !== null) {
+      clearTimeout(this.outTimer);
+      this.outTimer = null;
+    }
+    if (!this.outBuf) {
+      return;
+    }
+    const buf = this.outBuf;
+    this.outBuf = "";
+    this.atLineStart = buf.endsWith("\r\n") || buf.endsWith("\n");
+    this.writeEmitter.fire(buf);
   }
   /** ANSI: clear viewport + scrollback + home (real `clear`). */
   clearScreen() {
+    this.flushOut();
     this.writeEmitter.fire("\x1B[2J\x1B[3J\x1B[H");
     this.atLineStart = true;
   }
@@ -437,6 +461,7 @@ var NodineTerminal = class {
     return where === "/" ? "Nodine/" : `Nodine${where}`;
   }
   prompt() {
+    this.flushOut();
     if (!this.atLineStart) {
       this.writeEmitter.fire("\r\n");
       this.atLineStart = true;
@@ -484,9 +509,6 @@ var NodineTerminal = class {
           if (ch === "\r") {
             this.writeEmitter.fire("\r\n");
             void this.inputWriter.write("\r");
-          } else if (ch >= " ") {
-            this.writeEmitter.fire(ch);
-            void this.inputWriter.write(ch);
           } else {
             void this.inputWriter.write(ch);
           }
@@ -1356,7 +1378,14 @@ async function activate(_context) {
         "tmp": true,
         "usr": true,
         ".vscode": true
-      }
+      },
+      // the + button must create a Nodine terminal DIRECTLY (no profile
+      // picker). Provider-written workspace settings DO apply (this same
+      // files.exclude hides the runtime's system dirs) — the config-
+      // service route produced a null workspace override instead.
+      "terminal.integrated.defaultProfile.linux": "Nodine (Node.js)",
+      "terminal.integrated.defaultProfile.osx": "Nodine (Node.js)",
+      "terminal.integrated.defaultProfile.windows": "Nodine (Node.js)"
     }, null, 2);
     await vscode6.workspace.fs.writeFile(settingsUri, new TextEncoder().encode(payload + "\n"));
   };
@@ -1399,17 +1428,34 @@ async function activate(_context) {
       await openNodineWorkspaceOnce();
       syncNoProject();
       await seedExplorerSettings();
-      const setDefaultProfile = (target) => Promise.allSettled([
-        vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.linux", "Nodine (Node.js)", target),
-        vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.osx", "Nodine (Node.js)", target)
-      ]);
-      void setDefaultProfile(vscode6.ConfigurationTarget.Workspace).then((results) => {
-        const failed = results.some((r) => r.status === "rejected");
-        if (failed) {
-          void setDefaultProfile(vscode6.ConfigurationTarget.Global);
-        }
+      const termCfg = vscode6.workspace.getConfiguration("terminal.integrated");
+      void Promise.allSettled([
+        termCfg.update("defaultProfile.linux", void 0, vscode6.ConfigurationTarget.Workspace),
+        termCfg.update("defaultProfile.osx", void 0, vscode6.ConfigurationTarget.Workspace),
+        termCfg.update("defaultProfile.windows", void 0, vscode6.ConfigurationTarget.Workspace)
+      ]).then(() => {
+        void Promise.allSettled([
+          termCfg.update("defaultProfile.linux", "Nodine (Node.js)", vscode6.ConfigurationTarget.Global),
+          termCfg.update("defaultProfile.osx", "Nodine (Node.js)", vscode6.ConfigurationTarget.Global),
+          termCfg.update("defaultProfile.windows", "Nodine (Node.js)", vscode6.ConfigurationTarget.Global)
+        ]);
       });
       await focusDevTerminal(_context);
+      const bornAt = /* @__PURE__ */ new WeakMap();
+      _context.subscriptions.push(vscode6.window.onDidOpenTerminal((t) => bornAt.set(t, Date.now())));
+      _context.subscriptions.push(vscode6.window.onDidCloseTerminal((t) => {
+        if (vscode6.window.terminals.length > 0) {
+          return;
+        }
+        if (Date.now() - (bornAt.get(t) ?? 0) < 3e3) {
+          return;
+        }
+        setTimeout(() => {
+          if (vscode6.window.terminals.length === 0) {
+            createDevTerminal(_context);
+          }
+        }, 500);
+      }));
     } catch (err) {
       console.error("[webide-dev] auto workspace/terminal failed:", err);
     }
@@ -1421,10 +1467,11 @@ async function activate(_context) {
     // Terminal-profile entry point: invoked by the workbench whenever a
     // DEFAULT terminal is created (the + button, Ctrl+`, menu) because
     // this profile is the only shell in the static web build — no local
-    // process support exists. Falls through to the same nodine-backed
-    // pseudoterminal the "Create Dev Terminal" command uses.
+    // process support exists. Creates a FRESH terminal every time so
+    // multiple terminals work (the pty instances share one container,
+    // like bolt.diy's terminals share one WebContainer).
     vscode6.commands.registerCommand("webide-dev.createNodineTerminal", () => {
-      return focusDevTerminal(_context);
+      return createDevTerminal(_context);
     }),
     // The profile PROVIDER: without this registration the manifest's
     // terminal profile shows in the picker but cannot create terminals.

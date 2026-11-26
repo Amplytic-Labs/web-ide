@@ -109,7 +109,6 @@
         {
           "id": "webide-dev.nodine",
           "title": "Nodine (Node.js)",
-          "command": "webide-dev.createNodineTerminal",
           "icon": "terminal"
         }
       ]

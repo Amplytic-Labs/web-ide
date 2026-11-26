@@ -68,15 +68,39 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		return this.cwd ?? '/';
 	}
 
+	/**
+	 * Output coalescing: process output arrives as many tiny chunks (clack
+	 * writes each cursor sequence separately, npm per line). Fired as-is,
+	 * escape sequences split across xterm writes mis-render (stale prompt
+	 * frames). Buffer for ~12 ms and fire ONE atomic chunk — a real PTY does
+	 * the same, and atomic delivery is proven to render correctly.
+	 */
+	private outBuf = '';
+	private outTimer: ReturnType<typeof setTimeout> | null = null;
+
 	/** All output goes through here: bare \n → \r\n (no staircase output). */
 	private write(data: string): void {
-		const norm = data.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-		this.atLineStart = norm.endsWith('\r\n') || norm.endsWith('\n');
-		this.writeEmitter.fire(norm);
+		this.outBuf += data.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+		if (this.outTimer === null) {
+			this.outTimer = setTimeout(() => this.flushOut(), 12);
+		}
+	}
+
+	private flushOut(): void {
+		if (this.outTimer !== null) {
+			clearTimeout(this.outTimer);
+			this.outTimer = null;
+		}
+		if (!this.outBuf) { return; }
+		const buf = this.outBuf;
+		this.outBuf = '';
+		this.atLineStart = buf.endsWith('\r\n') || buf.endsWith('\n');
+		this.writeEmitter.fire(buf);
 	}
 
 	/** ANSI: clear viewport + scrollback + home (real `clear`). */
 	private clearScreen(): void {
+		this.flushOut(); // never reorder buffered output behind the clear
 		this.writeEmitter.fire('\x1b[2J\x1b[3J\x1b[H');
 		this.atLineStart = true;
 	}
@@ -142,6 +166,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	}
 
 	private prompt(): void {
+		this.flushOut(); // never reorder buffered output behind the prompt
 		if (!this.atLineStart) { this.writeEmitter.fire('\r\n'); this.atLineStart = true; }
 		this.writeEmitter.fire(`\x1b[36m${this.displayCwd()}\x1b[0m ❯ `);
 	}
@@ -179,22 +204,19 @@ class NodineTerminal implements vscode.Pseudoterminal {
 				return;
 			}
 			if (this.inputWriter) {
-				// forward to the process with LOCAL ECHO (the kernel does no
-				// echoing — without this, prompt questions like
-				// "? What is your app named?" look unanswerable).
-				// Bytes go through RAW: Enter stays \r because prompt libraries
-				// (clack: "What is your app named?") submit on the 'return'
-				// keypress — converting to \n breaks them; line readers (node
-				// readline, npm) treat a lone \r as a line ending too.
+				// forward bytes RAW and do NOT echo: the kernel presents the
+				// process with a TTY (isTTY true), so prompt libraries render
+				// their own input — clack redraws its frame, npm's `read`
+				// echoes each key. A terminal-side echo would interleave with
+				// those redraws (doubled chars, text past the placeholder).
+				// Enter stays \r: clack submits on the 'return' keypress; node
+				// readline treats a lone \r as a line ending too.
 				for (const ch of data) {
 					if (ch === '\r') {
-						this.writeEmitter.fire('\r\n');
+						this.writeEmitter.fire('\r\n'); // cursor feedback only
 						void this.inputWriter.write('\r');
-					} else if (ch >= ' ') {
-						this.writeEmitter.fire(ch);
-						void this.inputWriter.write(ch);
 					} else {
-						void this.inputWriter.write(ch); // control bytes, raw
+						void this.inputWriter.write(ch);
 					}
 				}
 				return;
