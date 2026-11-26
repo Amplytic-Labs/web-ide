@@ -130,6 +130,15 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 	_context.subscriptions.push(vscode.workspace.registerFileSystemProvider('nodine', provider, { isCaseSensitive: true }));
 	providerRegistered = true;
 
+	// One-time Explorer kick: the workbench queries the workspace root during
+	// boot, which can land BEFORE the container is up (the provider waits for
+	// it, but the tree may cache the empty/error state). A Created event on a
+	// synthetic child once the runtime is ready makes the tree re-read the
+	// root listing — same mechanism as the afterCommand hook below.
+	runtimeReady.then(() => {
+		provider.fireExternalChange(vscode.FileChangeType.Created, '/.nodine-sync');
+	}).catch(() => { /* boot failed — error already surfaced */ });
+
 	// The runtime has no fs.watch yet (kernel milestone M4) — terminal-side
 	// FS writes (mkdir/rm/node -e/npm) would never reach the Explorer. Fire a
 	// root + cwd listing-changed signal after every terminal command instead.

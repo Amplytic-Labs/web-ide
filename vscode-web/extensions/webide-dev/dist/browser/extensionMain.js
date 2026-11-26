@@ -88,7 +88,8 @@ async function bootContainer(runtimeUrl, workdirName = "project") {
 // src/fsProvider.ts
 var vscode2 = __toESM(require("vscode"));
 var SCHEME = "nodine";
-var NODINE_ROOT = "nodine://Nodine/";
+var NODINE_ROOT = "nodine://nodine/Nodine/";
+var WORKSPACE_PREFIX = "/Nodine";
 function nodineRoot() {
   return vscode2.Uri.parse(NODINE_ROOT);
 }
@@ -115,9 +116,21 @@ var NodineFileSystemProvider = class {
     }
     return c;
   }
+  /** workspace URI /Nodine[/x] → container path /[/x]; raw paths pass through */
   toContainerPath(uri) {
-    const rel = uri.path.replace(/^\/+/, "");
-    return rel ? `/${rel}` : "/";
+    const p = uri.path;
+    if (p === WORKSPACE_PREFIX) {
+      return "/";
+    }
+    if (p.startsWith(`${WORKSPACE_PREFIX}/`)) {
+      return p.slice(WORKSPACE_PREFIX.length);
+    }
+    return p.startsWith("/") ? p : `/${p}`;
+  }
+  /** container path /x → workspace URI nodine://nodine/Nodine/x */
+  toWorkspaceUri(containerPath) {
+    const rel = containerPath.replace(/^\/+/, "");
+    return vscode2.Uri.parse(`${NODINE_ROOT}${rel}`);
   }
   stat(uri) {
     return this._stat(this.toContainerPath(uri));
@@ -213,8 +226,7 @@ var NodineFileSystemProvider = class {
    * tree keeps its cached root listing and never shows the new files.
    */
   fireExternalChange(type, containerPath) {
-    const uri = vscode2.Uri.parse(`${NODINE_ROOT}${containerPath.replace(/^\/+/, "")}`);
-    this._onDidChangeFile.fire([{ type, uri }]);
+    this._onDidChangeFile.fire([{ type, uri: this.toWorkspaceUri(containerPath) }]);
   }
   async exists(p) {
     const c = await this.ready();
@@ -265,8 +277,8 @@ var NodineFileSystemProvider = class {
           const parts = dirty.replace(/\/+$/, "").split("/");
           parts.pop();
           const parent = parts.join("/") || "/";
-          this._fireDidChange(vscode2.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: parent }));
-          this._fireDidChange(vscode2.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: dirty }));
+          this._fireDidChange(this.toWorkspaceUri(parent));
+          this._fireDidChange(this.toWorkspaceUri(dirty));
         });
       } catch {
       }
@@ -471,7 +483,7 @@ var NodineTerminal = class {
         for (const ch of data) {
           if (ch === "\r") {
             this.writeEmitter.fire("\r\n");
-            void this.inputWriter.write("\n");
+            void this.inputWriter.write("\r");
           } else if (ch >= " ") {
             this.writeEmitter.fire(ch);
             void this.inputWriter.write(ch);
@@ -514,62 +526,95 @@ var NodineTerminal = class {
     if (!container) {
       return;
     }
-    const argv = tokenize(line);
-    if (argv.length === 0) {
+    const segments = splitAndSeq(line);
+    if (segments.every((s) => tokenize(s).length === 0)) {
       this.prompt();
-      return;
-    }
-    if (argv[0] === "clear") {
-      this.clearScreen();
-      this.prompt();
-      return;
-    }
-    if (argv[0] === "cd") {
-      this.changeDir(argv[1]);
-      return;
-    }
-    if (argv[0] === "pwd") {
-      this.write(`${this.resolveCwd(container)}\r
-`);
-      this.prompt();
-      return;
-    }
-    if (argv[0] === "echo") {
-      this.write(`${argv.slice(1).join(" ")}\r
-`);
-      this.prompt();
-      return;
-    }
-    if (argv[0] === "exit") {
-      this.closeEmitter.fire(0);
-      return;
-    }
-    if (argv[0] === ">") {
-      const code = line.replace(/^\s*>\s*/, "");
-      if (!code) {
-        this.prompt();
-        return;
-      }
-      this.running = true;
-      try {
-        const proc = await container.spawn("node", ["-e", replWrap(code)], {
-          cwd: this.resolveCwd(container),
-          env: { ...container.baseEnv }
-        });
-        this.current = proc;
-        await this.pump(proc, container);
-      } finally {
-        this.finishCommand();
-      }
       return;
     }
     this.running = true;
+    try {
+      for (const seg of segments) {
+        const code = await this.runSegment(seg, container);
+        if (code !== 0) {
+          break;
+        }
+      }
+    } finally {
+      this.finishCommand();
+    }
+  }
+  /**
+   * One &&-segment: builtins or a spawned process. Returns the exit code.
+   * Honors `> file` / `>> file` redirection (stdout → container file).
+   */
+  async runSegment(seg, container) {
+    const argv = tokenize(seg);
+    if (argv.length === 0) {
+      return 0;
+    }
+    let redirect = null;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === ">" || argv[i] === ">>") {
+        const target = argv[i + 1];
+        if (!target) {
+          this.write("\x1B[31msyntax error: expected file after redirect\x1B[0m\r\n");
+          return 2;
+        }
+        redirect = { path: target, append: argv[i] === ">>" };
+        argv.length = i;
+        break;
+      }
+    }
+    if (argv[0] === "clear") {
+      this.clearScreen();
+      return 0;
+    }
+    if (argv[0] === "cd") {
+      this.changeDir(argv[1]);
+      return 0;
+    }
+    if (argv[0] === "pwd") {
+      const out = `${this.resolveCwd(container)}\r
+`;
+      if (redirect) {
+        await this.writeContainerFile(container, redirect, out.replace("\r\n", "\n"));
+      } else {
+        this.write(out);
+      }
+      return 0;
+    }
+    if (argv[0] === "echo") {
+      const text = `${argv.slice(1).join(" ")}\r
+`;
+      if (redirect) {
+        await this.writeContainerFile(container, redirect, argv.slice(1).join(" ") + "\n");
+      } else {
+        this.write(text);
+      }
+      return 0;
+    }
+    if (argv[0] === "exit") {
+      this.closeEmitter.fire(0);
+      return 0;
+    }
+    if (argv[0] === ">") {
+      const code = seg.replace(/^\s*>\s*/, "");
+      if (!code) {
+        return 0;
+      }
+      const proc = await container.spawn("node", ["-e", replWrap(code)], {
+        cwd: this.resolveCwd(container),
+        env: { ...container.baseEnv }
+      });
+      this.current = proc;
+      return await this.pump(proc, container);
+    }
     try {
       let proc;
       if (argv[0] === "node") {
         if (argv.length === 1) {
           this.write('\x1B[90musage: node <file.js> \xB7 node -v \xB7 node -e "<code>"\x1B[0m\r\n');
-          return;
+          return 0;
         }
         proc = await container.spawn("node", argv.slice(1), {
           cwd: this.resolveCwd(container),
@@ -583,17 +628,40 @@ var NodineTerminal = class {
       }
       this.current = proc;
       this.inputWriter = proc.input ? proc.input.getWriter() : null;
-      await this.pump(proc, container);
+      return await this.pump(proc, container, redirect);
     } catch (err) {
       const msg = String(err).split("\n")[0].replace(/^FileSystemError:\s*/, "");
       this.write(`\x1B[31m${msg}\x1B[0m\r
 `);
-    } finally {
-      this.finishCommand();
+      return 1;
     }
   }
-  /** Stream a process's output into the terminal, CR-normalized. */
-  async pump(proc, container) {
+  /** `> file` / `>> file` sink: write (or append) text in the container FS. */
+  async writeContainerFile(container, redirect, data) {
+    const base = this.resolveCwd(container);
+    const p = redirect.path.startsWith("/") ? redirect.path : `${base}/${redirect.path}`;
+    let content = data;
+    if (redirect.append) {
+      try {
+        content = new TextDecoder().decode(await container.fs.readFile(p)) + data;
+      } catch {
+      }
+    } else {
+      const dir = p.slice(0, p.lastIndexOf("/")) || "/";
+      try {
+        await container.fs.mkdir(dir, { recursive: true });
+      } catch {
+      }
+    }
+    await container.fs.writeFile(p, content);
+  }
+  /**
+   * Stream a process's output into the terminal, CR-normalized. With a
+   * redirect, output is captured into the target file instead and the
+   * `(exit N)` line is suppressed (like a real shell).
+   */
+  async pump(proc, container, redirect) {
+    let captured = "";
     if (proc.output) {
       const reader = proc.output.getReader();
       try {
@@ -602,16 +670,31 @@ var NodineTerminal = class {
           if (done) {
             break;
           }
-          this.write(value);
+          if (redirect) {
+            captured += value;
+          } else {
+            this.write(value);
+          }
         }
       } catch {
       }
     }
     const code = await proc.exit;
+    if (redirect) {
+      try {
+        await this.writeContainerFile(container, redirect, captured);
+      } catch (err) {
+        this.write(`\x1B[31mwrite failed: ${String(err).split("\n")[0]}\x1B[0m\r
+`);
+        return 1;
+      }
+      return code === 0 ? 0 : code;
+    }
     if (code !== 0) {
       this.write(`\x1B[90m(exit ${code})\x1B[0m\r
 `);
     }
+    return code;
   }
   finishCommand() {
     this.running = false;
@@ -651,6 +734,31 @@ var NodineTerminal = class {
 };
 function replWrap(code) {
   return `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
+}
+function splitAndSeq(line) {
+  const out = [];
+  let cur = "";
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote) {
+        quote = null;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (ch === "&" && line[i + 1] === "&") {
+      out.push(cur);
+      cur = "";
+      i++;
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
 }
 function tokenize(line) {
   const out = [];
@@ -1138,6 +1246,10 @@ async function activate(_context) {
   let providerRegistered = false;
   _context.subscriptions.push(vscode6.workspace.registerFileSystemProvider("nodine", provider, { isCaseSensitive: true }));
   providerRegistered = true;
+  runtimeReady.then(() => {
+    provider.fireExternalChange(vscode6.FileChangeType.Created, "/.nodine-sync");
+  }).catch(() => {
+  });
   setAfterCommandHook(() => {
     provider.fireExternalChange(vscode6.FileChangeType.Created, "/.nodine-sync");
   });

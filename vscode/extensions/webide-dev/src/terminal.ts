@@ -181,11 +181,15 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			if (this.inputWriter) {
 				// forward to the process with LOCAL ECHO (the kernel does no
 				// echoing — without this, prompt questions like
-				// "? What is your app named?" look unanswerable)
+				// "? What is your app named?" look unanswerable).
+				// Bytes go through RAW: Enter stays \r because prompt libraries
+				// (clack: "What is your app named?") submit on the 'return'
+				// keypress — converting to \n breaks them; line readers (node
+				// readline, npm) treat a lone \r as a line ending too.
 				for (const ch of data) {
 					if (ch === '\r') {
 						this.writeEmitter.fire('\r\n');
-						void this.inputWriter.write('\n'); // line-readers need LF
+						void this.inputWriter.write('\r');
 					} else if (ch >= ' ') {
 						this.writeEmitter.fire(ch);
 						void this.inputWriter.write(ch);
@@ -232,61 +236,91 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		const container = this.container;
 		if (!container) { return; }
 
-		const argv = tokenize(line);
-		if (argv.length === 0) {
+		// && chains run left to right; a non-zero exit stops the chain (POSIX)
+		const segments = splitAndSeq(line);
+		if (segments.every(s => tokenize(s).length === 0)) {
 			this.prompt();
-			return;
-		}
-
-		if (argv[0] === 'clear') {
-			this.clearScreen();
-			this.prompt();
-			return;
-		}
-		if (argv[0] === 'cd') {
-			this.changeDir(argv[1]);
-			return;
-		}
-		if (argv[0] === 'pwd') {
-			this.write(`${this.resolveCwd(container)}\r\n`);
-			this.prompt();
-			return;
-		}
-		if (argv[0] === 'echo') {
-			this.write(`${argv.slice(1).join(' ')}\r\n`);
-			this.prompt();
-			return;
-		}
-		if (argv[0] === 'exit') {
-			this.closeEmitter.fire(0);
-			return;
-		}
-		// explicit JS-REPL escape hatch: `> 40+2` evaluates and prints
-		if (argv[0] === '>') {
-			const code = line.replace(/^\s*>\s*/, '');
-			if (!code) { this.prompt(); return; }
-			this.running = true;
-			try {
-				const proc = await container.spawn('node', ['-e', replWrap(code)], {
-					cwd: this.resolveCwd(container),
-					env: { ...container.baseEnv },
-				});
-				this.current = proc;
-				await this.pump(proc, container);
-			} finally {
-				this.finishCommand();
-			}
 			return;
 		}
 
 		this.running = true;
+		try {
+			for (const seg of segments) {
+				const code = await this.runSegment(seg, container);
+				if (code !== 0) { break; }
+			}
+		} finally {
+			this.finishCommand();
+		}
+	}
+
+	/**
+	 * One &&-segment: builtins or a spawned process. Returns the exit code.
+	 * Honors `> file` / `>> file` redirection (stdout → container file).
+	 */
+	private async runSegment(seg: string, container: NodineContainer): Promise<number> {
+		const argv = tokenize(seg);
+		if (argv.length === 0) { return 0; }
+
+		// redirect parsing: '>' / '>>' as a NON-initial token (a leading '>'
+		// stays the JS-REPL escape hatch below)
+		let redirect: { path: string; append: boolean } | null = null;
+		for (let i = 1; i < argv.length; i++) {
+			if (argv[i] === '>' || argv[i] === '>>') {
+				const target = argv[i + 1];
+				if (!target) {
+					this.write('\x1b[31msyntax error: expected file after redirect\x1b[0m\r\n');
+					return 2;
+				}
+				redirect = { path: target, append: argv[i] === '>>' };
+				argv.length = i; // the command is everything before the operator
+				break;
+			}
+		}
+
+		if (argv[0] === 'clear') {
+			this.clearScreen();
+			return 0;
+		}
+		if (argv[0] === 'cd') {
+			this.changeDir(argv[1]);
+			return 0;
+		}
+		if (argv[0] === 'pwd') {
+			const out = `${this.resolveCwd(container)}\r\n`;
+			if (redirect) { await this.writeContainerFile(container, redirect, out.replace('\r\n', '\n')); }
+			else { this.write(out); }
+			return 0;
+		}
+		if (argv[0] === 'echo') {
+			const text = `${argv.slice(1).join(' ')}\r\n`;
+			if (redirect) { await this.writeContainerFile(container, redirect, argv.slice(1).join(' ') + '\n'); }
+			else { this.write(text); }
+			return 0;
+		}
+		if (argv[0] === 'exit') {
+			this.closeEmitter.fire(0);
+			return 0;
+		}
+		// explicit JS-REPL escape hatch: `> 40+2` evaluates and prints
+		if (argv[0] === '>') {
+			const code = seg.replace(/^\s*>\s*/, '');
+			if (!code) { return 0; }
+			const proc = await container.spawn('node', ['-e', replWrap(code)], {
+				cwd: this.resolveCwd(container),
+				env: { ...container.baseEnv },
+			});
+			this.current = proc;
+			return await this.pump(proc, container);
+		}
+
 		try {
 			let proc: ContainerProcess;
 			if (argv[0] === 'node') {
 				if (argv.length === 1) {
 					// bare `node` has no TTY-backed REPL in the kernel — show usage
 					this.write('\x1b[90musage: node <file.js> · node -v · node -e "<code>"\x1b[0m\r\n');
-					return; // finally → finishCommand → prompt
+					return 0;
 				}
 				// `node <file>`, `node -v`, `node -e '<code>'` — spawn for real
 				proc = await container.spawn('node', argv.slice(1), {
@@ -304,32 +338,61 @@ class NodineTerminal implements vscode.Pseudoterminal {
 
 			this.current = proc;
 			this.inputWriter = proc.input ? proc.input.getWriter() : null;
-			await this.pump(proc, container);
+			return await this.pump(proc, container, redirect);
 		} catch (err) {
 			// spawn failure (missing binary): one clean line, no stack noise
 			const msg = String(err).split('\n')[0].replace(/^FileSystemError:\s*/, '');
 			this.write(`\x1b[31m${msg}\x1b[0m\r\n`);
-		} finally {
-			this.finishCommand();
+			return 1;
 		}
 	}
 
-	/** Stream a process's output into the terminal, CR-normalized. */
-	private async pump(proc: ContainerProcess, container: NodineContainer): Promise<void> {
+	/** `> file` / `>> file` sink: write (or append) text in the container FS. */
+	private async writeContainerFile(container: NodineContainer, redirect: { path: string; append: boolean }, data: string): Promise<void> {
+		const base = this.resolveCwd(container);
+		const p = redirect.path.startsWith('/') ? redirect.path : `${base}/${redirect.path}`;
+		let content = data;
+		if (redirect.append) {
+			try { content = new TextDecoder().decode(await container.fs.readFile(p)) + data; }
+			catch { /* new file */ }
+		} else {
+			const dir = p.slice(0, p.lastIndexOf('/')) || '/';
+			try { await container.fs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
+		}
+		await container.fs.writeFile(p, content);
+	}
+
+	/**
+	 * Stream a process's output into the terminal, CR-normalized. With a
+	 * redirect, output is captured into the target file instead and the
+	 * `(exit N)` line is suppressed (like a real shell).
+	 */
+	private async pump(proc: ContainerProcess, container: NodineContainer, redirect?: { path: string; append: boolean } | null): Promise<number> {
+		let captured = '';
 		if (proc.output) {
 			const reader = proc.output.getReader();
 			try {
 				for (;;) {
 					const { done, value } = await reader.read();
 					if (done) { break; }
-					this.write(value);
+					if (redirect) { captured += value; }
+					else { this.write(value); }
 				}
 			} catch { /* closed */ }
 		}
 		const code = await proc.exit;
+		if (redirect) {
+			try { await this.writeContainerFile(container, redirect, captured); }
+			catch (err) {
+				this.write(`\x1b[31mwrite failed: ${String(err).split('\n')[0]}\x1b[0m\r\n`);
+				return 1;
+			}
+			return code === 0 ? 0 : code;
+		}
 		if (code !== 0) {
 			this.write(`\x1b[90m(exit ${code})\x1b[0m\r\n`);
 		}
+		return code;
 	}
 
 	private finishCommand(): void {
@@ -365,6 +428,31 @@ class NodineTerminal implements vscode.Pseudoterminal {
 /** REPL wrapper: print the completion value (like a node REPL). */
 function replWrap(code: string): string {
 	return `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
+}
+
+/** Split a line on `&&` (quote-aware) into command segments. */
+function splitAndSeq(line: string): string[] {
+	const out: string[] = [];
+	let cur = '';
+	let quote: '"' | "'" | null = null;
+	for (let i = 0; i < line.length; i++) {
+		const ch = line[i];
+		if (quote) {
+			cur += ch;
+			if (ch === quote) { quote = null; }
+		} else if (ch === '"' || ch === "'") {
+			quote = ch;
+			cur += ch;
+		} else if (ch === '&' && line[i + 1] === '&') {
+			out.push(cur);
+			cur = '';
+			i++; // skip the second '&'
+		} else {
+			cur += ch;
+		}
+	}
+	out.push(cur);
+	return out.map(s => s.trim());
 }
 
 /** Minimal shell-style tokenizer (quotes + backslash escapes). */

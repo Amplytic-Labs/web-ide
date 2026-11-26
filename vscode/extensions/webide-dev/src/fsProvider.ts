@@ -18,11 +18,17 @@ import type { NodineContainer } from './nodine';
 const SCHEME = 'nodine';
 
 /**
- * The workspace ROOT: nodine://Nodine/ — the display name lives in the URI
- * AUTHORITY so VS Code derives the folder label "Nodine" (like C:\), while
- * the path stays "/" and maps to the container root unchanged.
+ * The workspace ROOT: nodine://nodine/Nodine/ — the display name is the
+ * BASENAME of the URI path ("Nodine", like C:\Nodine), so the Explorer
+ * header, window title and breadcrumbs all say "Nodine" instead of "/".
+ * The provider strips the leading /Nodine segment: every workspace path
+ * /Nodine/x maps to container path /x — the workspace folder IS the
+ * container root.
  */
-export const NODINE_ROOT = 'nodine://Nodine/';
+export const NODINE_ROOT = 'nodine://nodine/Nodine/';
+
+/** The synthetic workspace path of the container root. */
+export const WORKSPACE_PREFIX = '/Nodine';
 
 export function nodineRoot(): vscode.Uri {
 	return vscode.Uri.parse(NODINE_ROOT);
@@ -50,9 +56,20 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 		return c;
 	}
 
+	/** workspace URI /Nodine[/x] → container path /[/x]; raw paths pass through */
 	private toContainerPath(uri: vscode.Uri): string {
-		const rel = uri.path.replace(/^\/+/, '');
-		return rel ? `/${rel}` : '/';
+		const p = uri.path;
+		if (p === WORKSPACE_PREFIX) { return '/'; }
+		if (p.startsWith(`${WORKSPACE_PREFIX}/`)) {
+			return p.slice(WORKSPACE_PREFIX.length);
+		}
+		return p.startsWith('/') ? p : `/${p}`;
+	}
+
+	/** container path /x → workspace URI nodine://nodine/Nodine/x */
+	private toWorkspaceUri(containerPath: string): vscode.Uri {
+		const rel = containerPath.replace(/^\/+/, '');
+		return vscode.Uri.parse(`${NODINE_ROOT}${rel}`);
 	}
 
 	stat(uri: vscode.Uri): vscode.FileStat | Thenable<vscode.FileStat> {
@@ -155,10 +172,7 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 	 * tree keeps its cached root listing and never shows the new files.
 	 */
 	fireExternalChange(type: vscode.FileChangeType, containerPath: string): void {
-		// authority must match the workspace folder URI (nodine://Nodine/) or
-		// the workbench ignores the event
-		const uri = vscode.Uri.parse(`${NODINE_ROOT}${containerPath.replace(/^\/+/, '')}`);
-		this._onDidChangeFile.fire([{ type, uri }]);
+		this._onDidChangeFile.fire([{ type, uri: this.toWorkspaceUri(containerPath) }]);
 	}
 
 	private async exists(p: string): Promise<boolean> {
@@ -217,8 +231,8 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 					const parts = dirty.replace(/\/+$/, '').split('/');
 					parts.pop();
 					const parent = parts.join('/') || '/';
-					this._fireDidChange(vscode.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: parent }));
-					this._fireDidChange(vscode.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: dirty }));
+					this._fireDidChange(this.toWorkspaceUri(parent));
+					this._fireDidChange(this.toWorkspaceUri(dirty));
 				});
 			} catch {
 				// watching unsupported → no-op
