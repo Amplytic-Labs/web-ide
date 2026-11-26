@@ -206,8 +206,18 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		} else {
 			next = `${base}/${arg}`;
 		}
-		this.cwd = next.replace(/\/+$/, '') || '/';
-		this.prompt();
+		// resolve . / .. segments and collapse duplicate slashes: from the
+		// root base='/' joins as '//demo1', and `cd ..` must not leave a
+		// literal '..' in the path (showed as Nodine/demo1/..)
+		const segs: string[] = [];
+		for (const part of next.split('/')) {
+			if (!part || part === '.') { continue; }
+			if (part === '..') { segs.pop(); continue; }
+			segs.push(part);
+		}
+		this.cwd = '/' + segs.join('/');
+		// no prompt() here — finishCommand always prompts after the command,
+		// and prompting here made `cd` print the prompt TWICE
 	}
 
 	/**
@@ -392,7 +402,11 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			// stream (routed to xterm by the onOutput subscription in open()).
 			const spawnOpts = {
 				cwd: this.resolveCwd(container),
-				env: { ...container.baseEnv, ...(argv[0] === 'npm' || argv[0] === 'npx' ? { npm_config_progress: 'false', npm_config_loglevel: 'info' } : {}) },
+				// progress:false — the kernel tty is isTTY, so npm would draw
+				// spinner frames into the scrollback. NO loglevel override:
+				// npm's default 'notice' keeps the 'http fetch' debug spam out
+				// of the terminal (the old site passed no npm env either).
+				env: { ...container.baseEnv, ...(argv[0] === 'npm' || argv[0] === 'npx' ? { npm_config_progress: 'false' } : {}) },
 				stdio: redirect ? ('pipe' as const) : ('inherit' as const),
 			};
 			if (argv[0] === 'node') {

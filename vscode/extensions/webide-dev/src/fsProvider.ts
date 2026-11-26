@@ -102,15 +102,18 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 			} catch (err) {
 				throw vscode.FileSystemError.FileNotFound(uri);
 			}
-			// nodine returns dirents shaped {name, _kind: 'directory' | 'file'};
-			// plain strings (or unknown shapes) are resolved with a readdir
-			// probe — readdir on a file path throws ENOTDIR, so it is definitive.
+			// nodine Dirent carries the real kind in `_kind` ('directory' |
+			// 'file' | 'symlink'); isDirectory/isFile are METHODS — testing
+			// `e.isDirectory` for truth matched the method's existence, so
+			// EVERY entry classified as a directory (files rendered as
+			// folders). Call the methods, fall back to _kind/type.
 			const out: [string, vscode.FileType][] = [];
 			const unknown: string[] = [];
 			for (const e of raw) {
 				const name = typeof e === 'string' ? e : (e.name ?? String(e));
 				const kind = typeof e === 'object' && e !== null
-					? (e.isDirectory ? 'directory'
+					? (typeof e.isDirectory === 'function'
+						? (e.isDirectory() ? 'directory' : 'file')
 						: e._kind ?? (e.type === 2 ? 'directory' : e.type === 1 ? 'file' : undefined))
 					: undefined;
 				if (kind === 'directory') { out.push([name, vscode.FileType.Directory]); }

@@ -163,7 +163,7 @@ var NodineFileSystemProvider = class {
       const unknown = [];
       for (const e of raw) {
         const name = typeof e === "string" ? e : e.name ?? String(e);
-        const kind = typeof e === "object" && e !== null ? e.isDirectory ? "directory" : e._kind ?? (e.type === 2 ? "directory" : e.type === 1 ? "file" : void 0) : void 0;
+        const kind = typeof e === "object" && e !== null ? typeof e.isDirectory === "function" ? e.isDirectory() ? "directory" : "file" : e._kind ?? (e.type === 2 ? "directory" : e.type === 1 ? "file" : void 0) : void 0;
         if (kind === "directory") {
           out.push([name, vscode2.FileType.Directory]);
         } else if (kind === "file") {
@@ -498,8 +498,18 @@ var NodineTerminal = class {
     } else {
       next = `${base}/${arg}`;
     }
-    this.cwd = next.replace(/\/+$/, "") || "/";
-    this.prompt();
+    const segs = [];
+    for (const part of next.split("/")) {
+      if (!part || part === ".") {
+        continue;
+      }
+      if (part === "..") {
+        segs.pop();
+        continue;
+      }
+      segs.push(part);
+    }
+    this.cwd = "/" + segs.join("/");
   }
   /**
    * The supervisor's terminal-owner stdin FIFO (`__sup.sendStdin`) — the
@@ -671,7 +681,11 @@ var NodineTerminal = class {
       let proc;
       const spawnOpts = {
         cwd: this.resolveCwd(container),
-        env: { ...container.baseEnv, ...argv[0] === "npm" || argv[0] === "npx" ? { npm_config_progress: "false", npm_config_loglevel: "info" } : {} },
+        // progress:false — the kernel tty is isTTY, so npm would draw
+        // spinner frames into the scrollback. NO loglevel override:
+        // npm's default 'notice' keeps the 'http fetch' debug spam out
+        // of the terminal (the old site passed no npm env either).
+        env: { ...container.baseEnv, ...argv[0] === "npm" || argv[0] === "npx" ? { npm_config_progress: "false" } : {} },
         stdio: redirect ? "pipe" : "inherit"
       };
       if (argv[0] === "node") {
