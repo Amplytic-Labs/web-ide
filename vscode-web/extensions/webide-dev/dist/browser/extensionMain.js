@@ -330,6 +330,8 @@ var NodineTerminal = class {
     __publicField(this, "cwd", null);
     /** whether the last fired output ended with a newline (prompt placement) */
     __publicField(this, "atLineStart", true);
+    /** one-time hint shown when a running program doesn't read stdin */
+    __publicField(this, "stdinHintShown", false);
     __publicField(this, "nodeVersionCache", null);
   }
   /** Point the shell at a project folder (e.g. "/my-app"). Silent pre-boot. */
@@ -417,13 +419,17 @@ var NodineTerminal = class {
     }
     return this.nodeVersionCache;
   }
-  prompt() {
+  /** "/" renders as the workspace root name — Nodine/ (like C:\). */
+  displayCwd() {
     const where = this.cwd ?? "/";
+    return where === "/" ? "Nodine/" : `Nodine${where}`;
+  }
+  prompt() {
     if (!this.atLineStart) {
       this.writeEmitter.fire("\r\n");
       this.atLineStart = true;
     }
-    this.writeEmitter.fire(`\x1B[36m${where}\x1B[0m \u276F `);
+    this.writeEmitter.fire(`\x1B[36m${this.displayCwd()}\x1B[0m \u276F `);
   }
   /** `cd <dir>` builtin: resolve relative to the current cwd and switch. */
   changeDir(arg) {
@@ -448,8 +454,37 @@ var NodineTerminal = class {
     if (!this.container) {
       return;
     }
-    if (this.running && this.inputWriter) {
-      void this.inputWriter.write(data.replace(/\r/g, "\n"));
+    if (this.running) {
+      if (data.includes("")) {
+        if (this.inputWriter) {
+          void this.inputWriter.write("");
+        }
+        this.write("^C\r\n");
+        this.atLineStart = true;
+        try {
+          void this.current?.kill();
+        } catch {
+        }
+        return;
+      }
+      if (this.inputWriter) {
+        for (const ch of data) {
+          if (ch === "\r") {
+            this.writeEmitter.fire("\r\n");
+            void this.inputWriter.write("\n");
+          } else if (ch >= " ") {
+            this.writeEmitter.fire(ch);
+            void this.inputWriter.write(ch);
+          } else {
+            void this.inputWriter.write(ch);
+          }
+        }
+        return;
+      }
+      if (!this.stdinHintShown) {
+        this.stdinHintShown = true;
+        this.write("\x1B[90m(program running \u2014 Ctrl+C to stop)\x1B[0m\r\n");
+      }
       return;
     }
     for (const ch of data) {
@@ -581,6 +616,7 @@ var NodineTerminal = class {
   finishCommand() {
     this.running = false;
     this.current = null;
+    this.stdinHintShown = false;
     if (this.inputWriter) {
       try {
         void this.inputWriter.close();

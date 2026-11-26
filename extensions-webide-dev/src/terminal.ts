@@ -51,6 +51,8 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	private cwd: string | null = null;
 	/** whether the last fired output ended with a newline (prompt placement) */
 	private atLineStart = true;
+	/** one-time hint shown when a running program doesn't read stdin */
+	private stdinHintShown = false;
 
 	constructor(private readonly runtimeUrl: string) { }
 
@@ -133,10 +135,15 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		return this.nodeVersionCache;
 	}
 
-	private prompt(): void {
+	/** "/" renders as the workspace root name — Nodine/ (like C:\). */
+	private displayCwd(): string {
 		const where = this.cwd ?? '/';
+		return where === '/' ? 'Nodine/' : `Nodine${where}`;
+	}
+
+	private prompt(): void {
 		if (!this.atLineStart) { this.writeEmitter.fire('\r\n'); this.atLineStart = true; }
-		this.writeEmitter.fire(`\x1b[36m${where}\x1b[0m ❯ `);
+		this.writeEmitter.fire(`\x1b[36m${this.displayCwd()}\x1b[0m ❯ `);
 	}
 
 	/** `cd <dir>` builtin: resolve relative to the current cwd and switch. */
@@ -160,10 +167,40 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	handleInput(data: string): void {
 		if (!this.container) { return; }
 
-		// a foreground process owns stdin
-		if (this.running && this.inputWriter) {
-			// forward raw input to the process (CR → LF)
-			void this.inputWriter.write(data.replace(/\r/g, '\n'));
+		// a foreground process owns the terminal
+		if (this.running) {
+			// Ctrl+C terminates the foreground job (SIGINT semantics) — also
+			// fed through stdin so prompt libraries can exit gracefully
+			if (data.includes('\u0003')) {
+				if (this.inputWriter) { void this.inputWriter.write('\u0003'); }
+				this.write('^C\r\n');
+				this.atLineStart = true;
+				try { void this.current?.kill(); } catch { /* already gone */ }
+				return;
+			}
+			if (this.inputWriter) {
+				// forward to the process with LOCAL ECHO (the kernel does no
+				// echoing — without this, prompt questions like
+				// "? What is your app named?" look unanswerable)
+				for (const ch of data) {
+					if (ch === '\r') {
+						this.writeEmitter.fire('\r\n');
+						void this.inputWriter.write('\n'); // line-readers need LF
+					} else if (ch >= ' ') {
+						this.writeEmitter.fire(ch);
+						void this.inputWriter.write(ch);
+					} else {
+						void this.inputWriter.write(ch); // control bytes, raw
+					}
+				}
+				return;
+			}
+			// running but the program never opened stdin: swallow keystrokes
+			// so they don't pile into the prompt buffer and run as commands
+			if (!this.stdinHintShown) {
+				this.stdinHintShown = true;
+				this.write('\x1b[90m(program running — Ctrl+C to stop)\x1b[0m\r\n');
+			}
 			return;
 		}
 
@@ -298,6 +335,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	private finishCommand(): void {
 		this.running = false;
 		this.current = null;
+		this.stdinHintShown = false;
 		if (this.inputWriter) {
 			try { void this.inputWriter.close(); } catch { /* closed */ }
 			this.inputWriter = null;
