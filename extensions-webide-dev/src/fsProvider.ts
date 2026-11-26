@@ -6,25 +6,53 @@ import type { NodineContainer } from './nodine';
 
 /**
  * A read/write FileSystemProvider over the nodine container's filesystem,
- * rooted at the container workdir. Registered for the `nodine` scheme, so
+ * rooted at the CONTAINER ROOT. Registered for the `nodine` scheme, so
  * Explorer, editor tabs, search, and the terminal all share one real FS —
  * edits in the editor are visible to `node` processes immediately.
  *
- * URIs: nodine:///relative/path  →  /home/user/project/relative/path
+ * URIs: nodine:///folderName/…  →  /folderName/… in the container
+ * (uploaded / imported projects land at /<folderName>, so after an upload
+ * the workspace root IS the project — WebContainer-style.)
  */
 
 const SCHEME = 'nodine';
 
-export class NodineFileSystemProvider implements vscode.FileSystemProvider {
-	private readonly root: string;
+/**
+ * The workspace ROOT: nodine://Nodine/ — the display name lives in the URI
+ * AUTHORITY so VS Code derives the folder label "Nodine" (like C:\), while
+ * the path stays "/" and maps to the container root unchanged.
+ */
+export const NODINE_ROOT = 'nodine://Nodine/';
 
-	constructor(private readonly container: NodineContainer) {
-		this.root = container.workdir;
+export function nodineRoot(): vscode.Uri {
+	return vscode.Uri.parse(NODINE_ROOT);
+}
+
+export class NodineFileSystemProvider implements vscode.FileSystemProvider {
+
+	/** E2E diagnostic: how many times VS Code asked us to watch. */
+	public watchCalls = 0;
+
+	/**
+	 * bolt.diy-style wiring: the provider is registered BEFORE the runtime
+	 * boots and resolves the container lazily on every call. Any nodine:/
+	 * request that arrives during the boot window waits for the container
+	 * instead of failing with ENOPRO ("no file system provider found").
+	 */
+	constructor(private getContainer: () => Promise<NodineContainer | null>) { }
+
+	/** Resolve the container, or throw a VS Code-level "unavailable" error. */
+	private async ready(): Promise<NodineContainer> {
+		const c = await this.getContainer();
+		if (!c) {
+			throw vscode.FileSystemError.Unavailable('Dev environment is still booting (nodine runtime)');
+		}
+		return c;
 	}
 
 	private toContainerPath(uri: vscode.Uri): string {
 		const rel = uri.path.replace(/^\/+/, '');
-		return rel ? `${this.root}/${rel}` : this.root;
+		return rel ? `/${rel}` : '/';
 	}
 
 	stat(uri: vscode.Uri): vscode.FileStat | Thenable<vscode.FileStat> {
@@ -32,13 +60,14 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 	}
 
 	private async _stat(p: string): Promise<vscode.FileStat> {
+		const c = await this.ready();
 		try {
-			await this.container.fs.readdir(p);
+			await c.fs.readdir(p);
 			// readdir succeeding means it's a directory
 			return { type: vscode.FileType.Directory, ctime: 0, mtime: Date.now(), size: 0 };
 		} catch {
 			try {
-				const data = await this.container.fs.readFile(p);
+				const data = await c.fs.readFile(p);
 				return { type: vscode.FileType.File, ctime: 0, mtime: Date.now(), size: data.length };
 			} catch {
 				throw vscode.FileSystemError.FileNotFound(p);
@@ -48,74 +77,98 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 
 	readDirectory(uri: vscode.Uri): Thenable<[string, vscode.FileType][]> {
 		return (async () => {
+			const c = await this.ready();
 			const p = this.toContainerPath(uri);
+			let raw: any[];
 			try {
-				const raw = await this.container.fs.readdir(p, { withFileTypes: true } as any) as any[];
-				const out: [string, vscode.FileType][] = [];
-				for (const e of raw) {
-					const name = typeof e === 'string' ? e : (e.name ?? String(e));
-					const isDir = typeof e === 'object' && (e.isDirectory ?? (e.type ?? 2) === 2);
-					out.push([name, isDir ? vscode.FileType.Directory : vscode.FileType.File]);
-				}
-				// readdir withFileTypes may not be supported: fall back to stat-ing each
-				if (out.length > 0 && out.every(([, t]) => t === vscode.FileType.File) && out.some(([n]) => !n.includes('.'))) {
-					const detailed: [string, vscode.FileType][] = [];
-					for (const [name] of out) {
-						try {
-							await this.container.fs.readdir(`${p}/${name}`);
-							detailed.push([name, vscode.FileType.Directory]);
-						} catch {
-							detailed.push([name, vscode.FileType.File]);
-						}
-					}
-					return detailed;
-				}
-				return out;
+				raw = await c.fs.readdir(p, { withFileTypes: true } as any) as any[];
 			} catch (err) {
 				throw vscode.FileSystemError.FileNotFound(uri);
 			}
+			// nodine returns dirents shaped {name, _kind: 'directory' | 'file'};
+			// plain strings (or unknown shapes) are resolved with a readdir
+			// probe — readdir on a file path throws ENOTDIR, so it is definitive.
+			const out: [string, vscode.FileType][] = [];
+			const unknown: string[] = [];
+			for (const e of raw) {
+				const name = typeof e === 'string' ? e : (e.name ?? String(e));
+				const kind = typeof e === 'object' && e !== null
+					? (e.isDirectory ? 'directory'
+						: e._kind ?? (e.type === 2 ? 'directory' : e.type === 1 ? 'file' : undefined))
+					: undefined;
+				if (kind === 'directory') { out.push([name, vscode.FileType.Directory]); }
+				else if (kind === 'file') { out.push([name, vscode.FileType.File]); }
+				else { unknown.push(name); }
+			}
+			for (const name of unknown) {
+				try {
+					await c.fs.readdir(`${p}/${name}`);
+					out.push([name, vscode.FileType.Directory]);
+				} catch {
+					out.push([name, vscode.FileType.File]);
+				}
+			}
+			return out;
 		})();
 	}
 
 	readFile(uri: vscode.Uri): Thenable<Uint8Array> {
-		return this.container.fs.readFile(this.toContainerPath(uri)).catch(() => {
-			throw vscode.FileSystemError.FileNotFound(uri);
-		});
+		return (async () => {
+			const c = await this.ready();
+			return c.fs.readFile(this.toContainerPath(uri)).catch(() => {
+				throw vscode.FileSystemError.FileNotFound(uri);
+			});
+		})();
 	}
 
 	writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }): Thenable<void> {
-		const p = this.toContainerPath(uri);
 		return (async () => {
+			const c = await this.ready();
+			const p = this.toContainerPath(uri);
 			if (!options.overwrite) {
 				try {
-					await this.container.fs.readFile(p);
+					await c.fs.readFile(p);
 					if (!options.overwrite) { throw vscode.FileSystemError.FileExists(uri); }
 				} catch (e) {
 					if (e instanceof vscode.FileSystemError && e.code === 'FileExists') { throw e; }
 					// not found → create
 				}
 			}
-			await this.container.fs.writeFile(p, content);
+			await c.fs.writeFile(p, content);
 			this._fireDidChange(uri);
 		})();
 	}
 
 	/** VS Code FileSystemProvider API: create a directory. */
 	createDirectory(uri: vscode.Uri): Thenable<void> {
-		const p = this.toContainerPath(uri);
 		return (async () => {
-			await this.container.fs.mkdir(p, { recursive: true });
+			const c = await this.ready();
+			await c.fs.mkdir(this.toContainerPath(uri), { recursive: true });
 			this._fireFileCreated(uri);
 		})();
 	}
 
+	/**
+	 * bolt.diy-style event bridge: writes that bypass this provider (the
+	 * upload/import helpers and the terminal write straight to the container
+	 * FS) still must reach the workbench — without these events the Explorer
+	 * tree keeps its cached root listing and never shows the new files.
+	 */
+	fireExternalChange(type: vscode.FileChangeType, containerPath: string): void {
+		// authority must match the workspace folder URI (nodine://Nodine/) or
+		// the workbench ignores the event
+		const uri = vscode.Uri.parse(`${NODINE_ROOT}${containerPath.replace(/^\/+/, '')}`);
+		this._onDidChangeFile.fire([{ type, uri }]);
+	}
+
 	private async exists(p: string): Promise<boolean> {
+		const c = await this.ready();
 		try {
-			await this.container.fs.readdir(p);
+			await c.fs.readdir(p);
 			return true;
 		} catch {
 			try {
-				await this.container.fs.readFile(p);
+				await c.fs.readFile(p);
 				return true;
 			} catch {
 				return false;
@@ -124,38 +177,53 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 	}
 
 	delete(uri: vscode.Uri, options: { recursive: boolean }): Thenable<void> {
-		const p = this.toContainerPath(uri);
 		return (async () => {
+			const c = await this.ready();
+			const p = this.toContainerPath(uri);
 			if (!await this.exists(p)) { throw vscode.FileSystemError.FileNotFound(uri); }
-			await this.container.fs.rm(p, { recursive: options.recursive, force: true });
+			await c.fs.rm(p, { recursive: options.recursive, force: true });
 			this._fireFileDeleted(uri);
 		})();
 	}
 
 	rename(oldUri: vscode.Uri, newUri: vscode.Uri, options: { overwrite: boolean }): Thenable<void> {
 		return (async () => {
+			const c = await this.ready();
 			const from = this.toContainerPath(oldUri);
 			const to = this.toContainerPath(newUri);
 			if (!options.overwrite && await this.exists(to)) {
 				throw vscode.FileSystemError.FileExists(newUri);
 			}
-			await this.container.fs.rename(from, to);
+			await c.fs.rename(from, to);
 			this._fireFileDeleted(oldUri);
 			this._fireFileCreated(newUri);
 		})();
 	}
 
 	watch(uri: vscode.Uri): vscode.Disposable {
+		this.watchCalls++;
 		const p = this.toContainerPath(uri);
 		let watcher: { close(): void } | undefined;
-		try {
-			watcher = this.container.fs.watch(p, (_event, filename) => {
-				const rel = filename.startsWith(this.root) ? filename.slice(this.root.length) : `/${filename}`;
-				this._fireDidChange(vscode.Uri.joinPath(uri, rel.replace(/^\/+/, '')));
-			});
-		} catch {
-			// watching unsupported → no-op
-		}
+		// resolve the container lazily: watch() is called synchronously when
+		// the workspace folder is added, which may precede the boot
+		this.ready().then(c => {
+			try {
+				watcher = c.fs.watch(p, (_event, filename) => {
+					// The kernel delivers the changed entry only. Announce the
+					// PARENT directory as changed so the Explorer re-reads its
+					// listing (that is what makes terminal mkdir/rm/node -e
+					// writes appear live), plus the entry itself for editors.
+					const dirty = (filename ?? '').startsWith('/') ? filename : `${p}/${filename ?? ''}`;
+					const parts = dirty.replace(/\/+$/, '').split('/');
+					parts.pop();
+					const parent = parts.join('/') || '/';
+					this._fireDidChange(vscode.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: parent }));
+					this._fireDidChange(vscode.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: dirty }));
+				});
+			} catch {
+				// watching unsupported → no-op
+			}
+		}).catch(() => { /* boot failed → no watcher */ });
 		return new vscode.Disposable(() => watcher?.close());
 	}	// change events
 	private _onDidChangeFile = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
@@ -176,16 +244,21 @@ export class NodineFileSystemProvider implements vscode.FileSystemProvider {
 	get scheme(): string { return SCHEME; }
 }
 
-/** Open the container workdir as the workspace folder. */
-export async function openNodineWorkspace(_container: NodineContainer): Promise<void> {
-	const folderUri = vscode.Uri.parse(`${SCHEME}:/`);
-	// add or switch workspace folder
-	const existing = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === SCHEME);
-	if (!existing) {
-		if (vscode.workspace.workspaceFolders?.length) {
-			vscode.workspace.updateWorkspaceFolders(1, 0, { uri: folderUri, name: 'project (nodine)' });
-		} else {
-			vscode.workspace.updateWorkspaceFolders(0, vscode.workspace.workspaceFolders?.length ?? 0, { uri: folderUri, name: 'project (nodine)' });
-		}
+/**
+ * Make the container root the (only) workspace folder. The workbench boots
+ * inside a persistent tmp: workspace (WORKSPACE state), so this is a LIVE
+ * updateWorkspaceFolders — no window reload, the in-memory container (and
+ * its just-uploaded files) survives.
+ */
+export async function openNodineWorkspace(_container?: NodineContainer): Promise<void> {
+	const folderUri = nodineRoot();
+	const existing = vscode.workspace.workspaceFolders;
+	const already = existing?.some(f => f.uri.scheme === SCHEME);
+	if (already) { return; }
+	// swap every current folder for the nodine root, in place
+	const ok = vscode.workspace.updateWorkspaceFolders(
+		0, existing?.length ?? 0, { uri: folderUri, name: 'Nodine' });
+	if (!ok) {
+		console.error('[webide-dev] updateWorkspaceFolders returned false (workspace change rejected)');
 	}
 }

@@ -6,12 +6,33 @@ import { bootContainer, type NodineContainer, type ContainerProcess } from './no
 import { getProjectCwd } from './extensionMain';
 
 /**
+ * Hook fired after every terminal command completes so the extension can
+ * announce FS changes to the workbench (the runtime has no fs.watch).
+ * Set by extensionMain via setAfterCommandHook().
+ */
+let afterCommandHook: (() => void) | null = null;
+let hookFireCount = 0;
+
+export function setAfterCommandHook(fn: () => void): void {
+	afterCommandHook = fn;
+}
+
+export function getHookFireCount(): number {
+	return hookFireCount;
+}
+
+/**
  * A VS Code pseudoterminal backed by the nodine runtime.
  *
- * nodine runs one process per spawn (no interactive shell yet — the kernel
- * has no PTY/REPL), so this terminal is line-based: each submitted line is
- * tokenized and run as a real process (`node -e`, `npm install`, …) with
- * output streamed back, then a fresh prompt appears.
+ * nodine runs one process per spawn (no PTY/REPL in the kernel), so this
+ * terminal is line-based and behaves like a real shell:
+ *  - `node <file|flags>`, `npm <cmd>` and any container binary are spawned
+ *    as real processes (`node -v` prints the version, not a JS eval error)
+ *  - cd / pwd / echo / clear are builtins; the cwd is the CONTAINER ROOT
+ *    ("/") so browsing matches the Explorer's Nodine root (like C:\)
+ *  - process output is CR-normalized (bare \n → \r\n) so nothing staircases
+ *  - `clear` wipes screen AND scrollback
+ *  - `> 40+2` is the explicit JS-REPL escape hatch
  */
 
 class NodineTerminal implements vscode.Pseudoterminal {
@@ -26,45 +47,61 @@ class NodineTerminal implements vscode.Pseudoterminal {
 	private inputWriter: WritableStreamDefaultWriter<string> | null = null;
 	private buffer = '';
 	private running = false;
-	/** cwd for spawned commands — the project folder once one is uploaded. */
+	/** cwd for spawned commands — starts at the container root (Explorer root). */
 	private cwd: string | null = null;
+	/** whether the last fired output ended with a newline (prompt placement) */
+	private atLineStart = true;
 
 	constructor(private readonly runtimeUrl: string) { }
 
-	/** Point the shell at a project folder (e.g. "/my-app"). */
+	/** Point the shell at a project folder (e.g. "/my-app"). Silent pre-boot. */
 	cd(path: string): void {
-		this.cwd = path;
-		this.writeEmitter.fire(`\x1b[90mcd ${path}\x1b[0m\r\n`);
-		this.prompt();
+		if (path) { this.cwd = path.replace(/\/+$/, '') || '/'; }
+		else { this.cwd = '/'; }
+		if (this.container) { this.prompt(); }
 	}
 
-	/** Absolute directory commands run in: project folder if set, else workdir. */
+	/** Absolute directory commands run in: cwd (default the container root). */
 	private resolveCwd(container: NodineContainer): string {
-		return this.cwd ?? container.workdir;
+		return this.cwd ?? '/';
+	}
+
+	/** All output goes through here: bare \n → \r\n (no staircase output). */
+	private write(data: string): void {
+		const norm = data.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+		this.atLineStart = norm.endsWith('\r\n') || norm.endsWith('\n');
+		this.writeEmitter.fire(norm);
+	}
+
+	/** ANSI: clear viewport + scrollback + home (real `clear`). */
+	private clearScreen(): void {
+		this.writeEmitter.fire('\x1b[2J\x1b[3J\x1b[H');
+		this.atLineStart = true;
 	}
 
 	async open(_initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
-		this.writeEmitter.fire('Booting dev environment (nodine: real Node.js in your browser)…\r\n');
+		this.clearScreen();
+		this.write('\x1b[90mstarting dev environment…\x1b[0m\r\n');
 		try {
 			this.container = await bootContainer(this.runtimeUrl);
-			console.log('[webide-dev] terminal: container ready');
 		} catch (err) {
 			console.error('[webide-dev] runtime boot failed:', err);
-			this.writeEmitter.fire(`\x1b[31mFailed to boot runtime: ${err}\x1b[0m\r\n`);
-			this.writeEmitter.fire('The host must send COOP: same-origin + COEP: credentialless headers.\r\n');
+			this.write('\x1b[31mfailed to start the dev environment (the host must send cross-origin isolation headers).\x1b[0m\r\n');
 			this.closeEmitter.fire(1);
 			return;
 		}
 		const version = await this.nodeVersion();
-		console.log('[webide-dev] terminal: node version =', version);
-		this.writeEmitter.fire(`\x1b[32mready\x1b[0m — Node.js ${version} dev environment in ${this.resolveCwd(this.container)}\r\n`);
-		this.writeEmitter.fire('Line-based shell: type JS to evaluate, or run `npm <cmd>`, `node <file>`.\r\n\r\n');
+		// clean terminal: wipe the boot status, show just the version
+		this.clearScreen();
+		if (version) {
+			this.write(`Node.js ${version}\r\n\r\n`);
+		}
 		this.prompt();
 	}
 
 	private nodeVersionCache: string | null = null;
-	private async nodeVersion(): Promise<string> {
-		if (this.nodeVersionCache) { return this.nodeVersionCache; }
+	private async nodeVersion(): Promise<string | null> {
+		if (this.nodeVersionCache !== null) { return this.nodeVersionCache; }
 		try {
 			const proc = await this.container!.spawn('node', ['-p', 'process.version']);
 			let out = '';
@@ -85,34 +122,38 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			await Promise.race([readAll, new Promise(r => setTimeout(r, 2000))]);
 			if (code === null) {
 				try { await proc.kill(); } catch { /* gone */ }
-				this.nodeVersionCache = '(probe timed out)';
+				this.nodeVersionCache = null;
 			} else {
-				this.nodeVersionCache = out.trim() || '(no output)';
+				// the kernel's console.log quotes strings — strip them for display
+				this.nodeVersionCache = out.trim().replace(/^['"]|['"]$/g, '') || null;
 			}
-			console.log('[webide-dev] nodeVersion probe:', JSON.stringify(this.nodeVersionCache), 'code:', code);
-		} catch (err) {
-			console.error('[webide-dev] nodeVersion probe failed:', err);
-			this.nodeVersionCache = '(unknown)';
+		} catch {
+			this.nodeVersionCache = null;
 		}
 		return this.nodeVersionCache;
 	}
 
 	private prompt(): void {
-		const where = this.cwd ?? (this.container ? this.resolveCwd(this.container) : '');
-		this.writeEmitter.fire(`\x1b[36m${where || 'node'}>\x1b[0m `);
+		const where = this.cwd ?? '/';
+		if (!this.atLineStart) { this.writeEmitter.fire('\r\n'); this.atLineStart = true; }
+		this.writeEmitter.fire(`\x1b[36m${where}\x1b[0m ❯ `);
 	}
 
 	/** `cd <dir>` builtin: resolve relative to the current cwd and switch. */
 	private changeDir(arg: string | undefined): void {
 		if (!this.container) { return; }
 		const base = this.resolveCwd(this.container);
+		let next: string;
 		if (!arg || arg === '~') {
-			this.cwd = this.container.workdir;
+			next = this.container.workdir;
+		} else if (arg === '/' || arg === '-') {
+			next = '/';
 		} else if (arg.startsWith('/')) {
-			this.cwd = arg.replace(/\/+$/, '') || '/';
+			next = arg;
 		} else {
-			this.cwd = `${base}/${arg}`.replace(/\/+$/, '');
+			next = `${base}/${arg}`;
 		}
+		this.cwd = next.replace(/\/+$/, '') || '/';
 		this.prompt();
 	}
 
@@ -131,7 +172,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			if (ch === '\r') {
 				const line = this.buffer;
 				this.buffer = '';
-				this.writeEmitter.fire('\r\n');
+				this.write('\r\n');
 				void this.runLine(line);
 				return;
 			} else if (ch === '\u007f') { // backspace
@@ -141,7 +182,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 				}
 			} else if (ch === '\u0003') { // ctrl+c
 				this.buffer = '';
-				this.writeEmitter.fire('^C\r\n');
+				this.write('^C\r\n');
 				this.prompt();
 			} else if (ch >= ' ') {
 				this.buffer += ch;
@@ -161,7 +202,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		}
 
 		if (argv[0] === 'clear') {
-			this.writeEmitter.fire('\x1b[2J\x1b[H');
+			this.clearScreen();
 			this.prompt();
 			return;
 		}
@@ -170,7 +211,12 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			return;
 		}
 		if (argv[0] === 'pwd') {
-			this.writeEmitter.fire(`${this.resolveCwd(container)}\r\n`);
+			this.write(`${this.resolveCwd(container)}\r\n`);
+			this.prompt();
+			return;
+		}
+		if (argv[0] === 'echo') {
+			this.write(`${argv.slice(1).join(' ')}\r\n`);
 			this.prompt();
 			return;
 		}
@@ -178,77 +224,89 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			this.closeEmitter.fire(0);
 			return;
 		}
-
+		// explicit JS-REPL escape hatch: `> 40+2` evaluates and prints
+		if (argv[0] === '>') {
+			const code = line.replace(/^\s*>\s*/, '');
+			if (!code) { this.prompt(); return; }
 			this.running = true;
 			try {
-				let proc: ContainerProcess;
-				// REPL-like evaluation: wrap code so the completion value prints
-				// (node -e alone swallows it; `40+2` should show 42 like a REPL)
-				const evalCode = (code: string) => `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
-				if (argv[0] === 'node') {
-					// `node file.js …` runs the file; bare JS goes through -e
-					if (argv.length > 1 && !argv[1].startsWith('-')) {
-						proc = await container.spawn('node', argv.slice(1), {
-							cwd: this.resolveCwd(container),
-							env: { ...container.baseEnv },
-						});
-					} else {
-						// evaluate remaining args as code: `node console.log(1)` → node -e
-						const code = argv.slice(1).join(' ');
-						if (!code) { this.prompt(); this.running = false; return; }
-						proc = await container.spawn('node', ['-e', evalCode(code)], {
-							cwd: this.resolveCwd(container),
-							env: { ...container.baseEnv },
-						});
-					}
-				} else if (argv[0] === 'npm' || argv[0] === 'npx') {
-					proc = await container.spawn(argv[0], argv.slice(1), {
-						cwd: this.resolveCwd(container),
-						env: { ...container.baseEnv, npm_config_progress: 'false', npm_config_loglevel: 'info' },
-					});
-				} else if (argv[0] === 'ls' || argv[0] === 'cat' || argv[0] === 'pwd' || argv[0] === 'mkdir' || argv[0] === 'grep' || argv[0] === 'wc' || argv[0] === 'head' || argv[0] === 'sh') {
-					// nodine coreutils are real /usr/bin programs
-					proc = await container.spawn(argv[0], argv.slice(1), {
-						cwd: this.resolveCwd(container),
-						env: { ...container.baseEnv },
-					});
-				} else {
-					// treat unknown commands as JS to evaluate (shell-ish convenience)
-					proc = await container.spawn('node', ['-e', evalCode(line)], {
-						cwd: this.resolveCwd(container),
-						env: { ...container.baseEnv },
-					});
+				const proc = await container.spawn('node', ['-e', replWrap(code)], {
+					cwd: this.resolveCwd(container),
+					env: { ...container.baseEnv },
+				});
+				this.current = proc;
+				await this.pump(proc, container);
+			} finally {
+				this.finishCommand();
+			}
+			return;
+		}
+
+		this.running = true;
+		try {
+			let proc: ContainerProcess;
+			if (argv[0] === 'node') {
+				if (argv.length === 1) {
+					// bare `node` has no TTY-backed REPL in the kernel — show usage
+					this.write('\x1b[90musage: node <file.js> · node -v · node -e "<code>"\x1b[0m\r\n');
+					return; // finally → finishCommand → prompt
 				}
+				// `node <file>`, `node -v`, `node -e '<code>'` — spawn for real
+				proc = await container.spawn('node', argv.slice(1), {
+					cwd: this.resolveCwd(container),
+					env: { ...container.baseEnv },
+				});
+			} else {
+				// npm / npx / coreutils / anything else in the container:
+				// spawn as a real process; a missing binary fails fast
+				proc = await container.spawn(argv[0], argv.slice(1), {
+					cwd: this.resolveCwd(container),
+					env: { ...container.baseEnv, ...(argv[0] === 'npm' || argv[0] === 'npx' ? { npm_config_progress: 'false', npm_config_loglevel: 'info' } : {}) },
+				});
+			}
 
 			this.current = proc;
 			this.inputWriter = proc.input ? proc.input.getWriter() : null;
-
-			if (proc.output) {
-				const reader = proc.output.getReader();
-				try {
-					for (;;) {
-						const { done, value } = await reader.read();
-						if (done) { break; }
-						this.writeEmitter.fire(value);
-					}
-				} catch { /* closed */ }
-			}
-
-			const code = await proc.exit;
-			if (code !== 0) {
-				this.writeEmitter.fire(`\x1b[90m(exit ${code})\x1b[0m\r\n`);
-			}
+			await this.pump(proc, container);
 		} catch (err) {
-			this.writeEmitter.fire(`\x1b[31m${err}\x1b[0m\r\n`);
+			// spawn failure (missing binary): one clean line, no stack noise
+			const msg = String(err).split('\n')[0].replace(/^FileSystemError:\s*/, '');
+			this.write(`\x1b[31m${msg}\x1b[0m\r\n`);
 		} finally {
-			this.running = false;
-			this.current = null;
-			if (this.inputWriter) {
-				try { await this.inputWriter.close(); } catch { /* closed */ }
-				this.inputWriter = null;
-			}
-			this.prompt();
+			this.finishCommand();
 		}
+	}
+
+	/** Stream a process's output into the terminal, CR-normalized. */
+	private async pump(proc: ContainerProcess, container: NodineContainer): Promise<void> {
+		if (proc.output) {
+			const reader = proc.output.getReader();
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) { break; }
+					this.write(value);
+				}
+			} catch { /* closed */ }
+		}
+		const code = await proc.exit;
+		if (code !== 0) {
+			this.write(`\x1b[90m(exit ${code})\x1b[0m\r\n`);
+		}
+	}
+
+	private finishCommand(): void {
+		this.running = false;
+		this.current = null;
+		if (this.inputWriter) {
+			try { void this.inputWriter.close(); } catch { /* closed */ }
+			this.inputWriter = null;
+		}
+		// the runtime has no fs.watch (kernel milestone M4) — announce the FS
+		// MAY have changed after every command so the Explorer re-reads the
+		// root listing (terminal mkdir/rm/node -e/npm writes show up live)
+		try { hookFireCount++; afterCommandHook?.(); } catch { /* hook optional */ }
+		this.prompt();
 	}
 
 	setDimensions(_dimensions: vscode.TerminalDimensions): void {
@@ -264,6 +322,11 @@ class NodineTerminal implements vscode.Pseudoterminal {
 			try { await this.current.kill(); } catch { /* already gone */ }
 		}
 	}
+}
+
+/** REPL wrapper: print the completion value (like a node REPL). */
+function replWrap(code: string): string {
+	return `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
 }
 
 /** Minimal shell-style tokenizer (quotes + backslash escapes). */

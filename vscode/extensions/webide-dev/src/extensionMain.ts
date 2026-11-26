@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 import * as vscode from 'vscode';
 import { bootContainer, getContainer, isCrossOriginIsolated, type NodineContainer } from './nodine';
-import { NodineFileSystemProvider, openNodineWorkspace } from './fsProvider';
-import { createDevTerminal, focusDevTerminal, NodineProfileProvider } from './terminal';
+import { NodineFileSystemProvider, nodineRoot, openNodineWorkspace } from './fsProvider';
+import { createDevTerminal, focusDevTerminal, NodineProfileProvider, setAfterCommandHook, getHookFireCount } from './terminal';
 import { importFromGithub } from './githubImport';
 import { uploadFolder } from './folderUpload';
 
@@ -83,19 +83,11 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 	const config = vscode.workspace.getConfiguration('webide-dev');
 	const runtimeUrl = config.get<string>('runtimeUrl', '/nodine/supervisor.mjs');
 
-	// AUTO WORKSPACE: the IDE boots straight into the "nodine" workspace —
-	// the explorer shows the container root and every terminal/runner is
-	// linked to it. The runtime boots lazily underneath (the fs provider
-	// reads resolve once it is up); no upload or import is needed to run
-	// code — the user can scaffold a project with npm/create-* in the
-	// terminal, or import/upload into the already-open workspace.
-	// (Placed after the openNodineWorkspaceOnce declaration — these are
-	// consts, and calling one before its line runs hits the TDZ.)
-
-	// LAZY BOOT: nothing happens on startup. The runtime boots on the first
-	// command that needs it — Create Dev Terminal, Import from GitHub or
-	// Upload Folder. A fresh start shows the plain welcome page, no boot
-	// toast.
+	// Runtime boot singleton. BOLT.DIY-STYLE EAGER BOOT: bolt.diy boots the
+	// WebContainer in a module-level promise as soon as the client loads —
+	// the environment is simply always there. Same here: the boot starts at
+	// activation, not on the first command; the returned promise is the
+	// handle everything else hangs off.
 	let readyPromise: Promise<NodineContainer | null> | null = null;
 
 	const ensureRuntime = (): Promise<NodineContainer | null> => {
@@ -108,31 +100,7 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 					return null;
 				}
 				try {
-					const container = await bootContainer(runtimeUrl);
-					// Register the nodine: provider; the workspace folder is only
-					// added on demand (adding it from an empty workspace would
-					// reload the window and destroy the in-memory container).
-					const provider = new NodineFileSystemProvider(container);
-						// Test hook (headless E2E): simulates Upload Folder's post-copy path
-		// without the native picker — writes a small project into the container
-		// and runs projectReady(). Not exposed in any menu; `_`-prefixed
-		// commands are hidden from the palette by VS Code convention. Reached
-		// through globalThis from the extension-host iframe.
-		const simulateUpload = async (folderName: string): Promise<string> => {
-			const fs = await getFs();
-			if (!fs) { return 'no-runtime'; }
-			await fs.ensureDir(folderName);
-			await fs.writeFile(`${folderName}/package.json`, new TextEncoder().encode(
-				JSON.stringify({ name: folderName, version: '1.0.0', scripts: { start: 'node index.js' } }, null, 2)));
-			await fs.writeFile(`${folderName}/index.js`, new TextEncoder().encode('console.log("hello from ' + folderName + '");\n'));
-			await projectReady(folderName);
-			return 'ok';
-		};
-		vscode.commands.registerCommand('webide-dev._simulateUpload', simulateUpload);
-		(globalThis as Record<string, unknown>).__webideDevTest = { simulateUpload };
-
-	_context.subscriptions.push(vscode.workspace.registerFileSystemProvider('nodine', provider, { isCaseSensitive: true }));
-					return container;
+					return await bootContainer(runtimeUrl);
 				} catch (err) {
 					console.error('[webide-dev] runtime boot failed:', err);
 					readyPromise = null; // allow retry on next command
@@ -144,38 +112,35 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		return readyPromise;
 	};
 
-	// Adds the nodine: workspace folder exactly once, on demand (import /
-	// upload completion). The workbench starts in a persistent tmp: workspace
-	// (WORKSPACE state — see scripts/static_fill.py), so switching roots is a
-	// LIVE updateWorkspaceFolders: no reload, the in-memory container with the
-	// uploaded files survives.
-	const openNodineWorkspaceOnce = async (): Promise<void> => {
-		const existing = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'nodine');
-		if (existing) { return; }
-		await openNodineWorkspace(await ensureRuntime() as NodineContainer);
-	};
+	// start the boot NOW (activation time) — do not await
+	const runtimeReady = ensureRuntime();
 
-	// AUTO WORKSPACE (see comment at the top of activate): open the nodine
-	// workspace right away so the explorer + terminals start in it.
-	openNodineWorkspaceOnce().then(() => {
-		// Make the Nodine profile the DEFAULT terminal — AFTER the workspace
-		// exists (a Workspace-target update with no open workspace fails with
-		// "no workspace is opened"). Without a default, the workbench's
-		// generic terminal creation has no profile to use (no local process
-		// support in a static web build) and silently does nothing; with it,
-		// +, Ctrl+` and palette creation all route to the nodine pty.
-		const setDefaultProfile = (target: vscode.ConfigurationTarget) =>
-			Promise.allSettled([
-				vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.linux', 'Nodine (Node.js)', target),
-				vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.osx', 'Nodine (Node.js)', target),
-			]);
-		void setDefaultProfile(vscode.ConfigurationTarget.Workspace).then(results => {
-			const failed = results.some(r => r.status === 'rejected');
-			if (failed) {
-				// empty/failed workspace write → user-level default instead
-				void setDefaultProfile(vscode.ConfigurationTarget.Global);
-			}
-		});
+	// BOLT.DIY-STYLE FS WIRING: register the nodine: provider SYNCHRONOUSLY,
+	// bound to a lazy container reference. Every nodine:/ request that lands
+	// during the boot window (workspace-folder restore on reload, snippets
+	// service, explorer refresh…) now WAITS for the container instead of
+	// failing with ENOPRO / "no file system provider found for nodine:/".
+	// bolt.diy never has this class of bug because the container FS is the
+	// only FS and it exists from app start; this is the VS Code equivalent.
+	const provider = new NodineFileSystemProvider(async () => {
+		await runtimeReady;
+		return getContainer();
+	});
+	let providerRegistered = false;
+	_context.subscriptions.push(vscode.workspace.registerFileSystemProvider('nodine', provider, { isCaseSensitive: true }));
+	providerRegistered = true;
+
+	// The runtime has no fs.watch yet (kernel milestone M4) — terminal-side
+	// FS writes (mkdir/rm/node -e/npm) would never reach the Explorer. Fire a
+	// root + cwd listing-changed signal after every terminal command instead.
+	setAfterCommandHook(() => {
+		// The runtime has no fs.watch (kernel milestone M4) and there is no
+		// explorer-refresh command in this build. A Created event on a
+		// synthetic child makes the tree re-read the ROOT listing (the tree
+		// refreshes the PARENT of every Created/Deleted uri), so terminal
+		// mkdir/rm/node -e/npm writes show up live. Changed events do NOT
+		// refresh listings (they only update open editors).
+		provider.fireExternalChange(vscode.FileChangeType.Created, '/.nodine-sync');
 	});
 
 	// Upload / GitHub import write the project at the CONTAINER ROOT
@@ -185,16 +150,32 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 	const getFs = async (): Promise<{ writeFile: (p: string, c: Uint8Array) => Promise<void>; ensureDir: (path: string) => Promise<void> } | null> => {
 		const container = await ensureRuntime();
 		if (!container) { return null; }
+		// bolt.diy-style: every write is announced to the workbench through the
+		// provider's change events — the Explorer tree (and open editors) react
+		// to FS changes instead of showing a cached listing.
+		const fire = (type: vscode.FileChangeType, p: string) =>
+			provider.fireExternalChange(type, `/${p}`);
 		return {
 			// p is a project-relative path ("<folderName>/src/a.js"); write it
 			// at the container root: /<folderName>/src/a.js
 			writeFile: async (p, contents) => {
 				const dir = p.split('/').slice(0, -1).join('/');
-				if (dir) { await container.fs.mkdir(`/${dir}`, { recursive: true }).catch(() => { }); }
+				if (dir) {
+					try {
+						await container.fs.mkdir(`/${dir}`, { recursive: true });
+						fire(vscode.FileChangeType.Created, dir);
+					} catch { /* already existed */ }
+				}
 				await container.fs.writeFile(`/${p}`, contents);
+				fire(vscode.FileChangeType.Changed, p);
+				// parent listing changed — re-read signal (root included)
+				fire(vscode.FileChangeType.Changed, dir);
 			},
 			ensureDir: async (p) => {
-				await container.fs.mkdir(`/${p}`, { recursive: true }).catch(() => { });
+				try {
+					await container.fs.mkdir(`/${p}`, { recursive: true });
+					fire(vscode.FileChangeType.Created, p);
+				} catch { /* already existed */ }
 			},
 		};
 	};
@@ -207,9 +188,93 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		return fs;
 	};
 
+	// Test hook (headless E2E): simulates Upload Folder's post-copy path
+	// without the native picker — writes a small project into the container
+	// and runs projectReady(). Not exposed in any menu; `_`-prefixed
+	// commands are hidden from the palette by VS Code convention. Reached
+	// through globalThis from the extension-host iframe.
+	const simulateUpload = async (folderName: string): Promise<string> => {
+		const fs = await getFs();
+		if (!fs) { return 'no-runtime'; }
+		await fs.ensureDir(folderName);
+		await fs.writeFile(`${folderName}/package.json`, new TextEncoder().encode(
+			JSON.stringify({ name: folderName, version: '1.0.0', scripts: { start: 'node index.js' } }, null, 2)));
+		await fs.writeFile(`${folderName}/index.js`, new TextEncoder().encode('console.log("hello from ' + folderName + '");\n'));
+		await projectReady(folderName);
+		return 'ok';
+	};
+	vscode.commands.registerCommand('webide-dev._simulateUpload', simulateUpload);
+	// headless E2E state probe: workspace folders + provider health from the
+	// extension host worker itself (reached via page.workers() in tests)
+	(globalThis as Record<string, unknown>).__webideDevTest = {
+		simulateUpload,
+		provider,
+		state: async () => ({
+			activated: true,
+			providerRegistered: providerRegistered,
+			watchCalls: provider.watchCalls,
+			hookFired: getHookFireCount(),
+			activationEvents: vscode.extensions.getExtension('amplytic.webide-dev')?.packageJSON?.activationEvents ?? null,
+			folders: (vscode.workspace.workspaceFolders ?? []).map(f => ({ uri: f.uri.toString(), name: f.name })),
+			readdirViaFs: await (async () => {
+				try {
+					const ents = await vscode.workspace.fs.readDirectory(nodineRoot());
+					return ents.map(([n, t]) => n + (t === vscode.FileType.Directory ? '/' : '')).join(',');
+				} catch (e) { return 'ERR:' + String(e).slice(0, 90); }
+			})(),
+			readdirRoot: await (async () => {
+				try {
+					const c = await ensureRuntime();
+					return c ? (await c.fs.readdir('/')).join(',') : 'no-container';
+				} catch (e) { return 'err:' + String(e).slice(0, 80); }
+			})(),
+		}),
+	};
+
+	// Adds the nodine: workspace folder exactly once (import / upload
+	// completion, and the startup path below). Normally unnecessary: the
+	// workbench boots straight into the nodine:/ folder (folderUri in the
+	// web configuration), so the folder is already present. Kept as a
+	// fallback for odd states (e.g. an empty untitled workspace).
+	const openNodineWorkspaceOnce = async (): Promise<void> => {
+		const existing = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'nodine');
+		if (existing) { return; }
+		await openNodineWorkspace();
+	};
+
+	/**
+	 * Folder settings: hide the runtime's pre-created system directories
+	 * (bin/home/project/root/tmp/usr) so the Nodine root is CLEAN — like
+	 * C:\ — and users see (and create) their own folders. The runtime still
+	 * uses those dirs; this only affects the Explorer/search. Written once;
+	 * existing settings are never clobbered.
+	 */
+	const seedExplorerSettings = async (): Promise<void> => {
+		const settingsUri = vscode.Uri.joinPath(nodineRoot(), '.vscode/settings.json');
+		try {
+			await vscode.workspace.fs.readFile(settingsUri);
+			return; // settings already exist — don't clobber
+		} catch { /* missing → seed */ }
+		const payload = JSON.stringify({
+			'files.exclude': {
+				'bin': true,
+				'home': true,
+				'project': true,
+				'root': true,
+				'tmp': true,
+				'usr': true,
+				'.vscode': true,
+			},
+		}, null, 2);
+		await vscode.workspace.fs.writeFile(settingsUri, new TextEncoder().encode(payload + '\n'));
+	};
+
 	const reveal = async (_folderName: string) => {
 		// expand the workspace in the explorer and focus it
-		await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.parse('nodine:/'));
+		await vscode.commands.executeCommand('revealInExplorer', nodineRoot());
+		// nudge the tree to re-read the root listing (synthetic child event —
+		// there is no explorer-refresh command in this build)
+		provider.fireExternalChange(vscode.FileChangeType.Created, '/.nodine-sync');
 		vscode.commands.executeCommand('workbench.view.explorer');
 	};
 
@@ -242,6 +307,45 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		await focusDevTerminal(_context);   // boots (if needed) + shows + cds
 		await reveal(folderName);
 	};
+
+	// AUTO WORKSPACE + AUTO TERMINAL (bolt.diy behavior): as soon as the
+	// container is up, open the nodine workspace so the explorer resolves
+	// immediately, and create the dev terminal automatically — the user
+	// never opens a workbench with a dead FS or no shell.
+	runtimeReady.then(async (container) => {
+		if (!container) { return; }
+		try {
+			await openNodineWorkspaceOnce();
+			syncNoProject();
+
+			// clean Nodine root: hide the runtime's pre-created system dirs
+			await seedExplorerSettings();
+
+			// Make the Nodine profile the DEFAULT terminal — AFTER the workspace
+			// exists (a Workspace-target update with no open workspace fails with
+			// "no workspace is opened"). Without a default, the workbench's
+			// generic terminal creation has no profile to use (no local process
+			// support in a static web build) and silently does nothing; with it,
+			// +, Ctrl+` and palette creation all route to the nodine pty.
+			const setDefaultProfile = (target: vscode.ConfigurationTarget) =>
+				Promise.allSettled([
+					vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.linux', 'Nodine (Node.js)', target),
+					vscode.workspace.getConfiguration('terminal.integrated').update('defaultProfile.osx', 'Nodine (Node.js)', target),
+				]);
+			void setDefaultProfile(vscode.ConfigurationTarget.Workspace).then(results => {
+				const failed = results.some(r => r.status === 'rejected');
+				if (failed) {
+					// empty/failed workspace write → user-level default instead
+					void setDefaultProfile(vscode.ConfigurationTarget.Global);
+				}
+			});
+
+			// the terminal initiates automatically (skipped if one already exists)
+			await focusDevTerminal(_context);
+		} catch (err) {
+			console.error('[webide-dev] auto workspace/terminal failed:', err);
+		}
+	});
 
 	_context.subscriptions.push(
 		vscode.commands.registerCommand('webide-dev.createTerminal', () => {

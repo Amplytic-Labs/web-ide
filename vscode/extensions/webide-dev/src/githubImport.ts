@@ -147,12 +147,15 @@ export async function importFromGithub(
 						const contents: Uint8Array = blob.encoding === 'base64'
 							? base64ToBytes(blob.content)
 							: new TextEncoder().encode(blob.content);
+						// land files inside <owner>-<repo>/ (same convention as
+						// Upload Folder and projectReady), NOT at the container root
 						const dir = node.path.split('/').slice(0, -1).join('/');
-						if (dir && !dirs.has(dir)) {
-							await ensureDir(dir);
-							dirs.add(dir);
+						const destDir = dir ? `${owner}-${repo}/${dir}` : `${owner}-${repo}`;
+						if (!dirs.has(destDir)) {
+							await ensureDir(destDir);
+							dirs.add(destDir);
 						}
-						await writeFile(node.path, contents);
+						await writeFile(`${owner}-${repo}/${node.path}`, contents);
 						imported++;
 					} catch (err) {
 						failed++;

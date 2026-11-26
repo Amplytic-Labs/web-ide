@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-SITE = Path('/home/z/my-project/vscode-web')
+SITE = Path(__file__).resolve().parent.parent / 'vscode-web'
 WORKBENCH_HTML = SITE / 'out/vs/code/browser/workbench/workbench.html'
 INDEX_HTML = SITE / 'index.html'
 CALLBACK_HTML = SITE / 'out/vs/code/browser/workbench/callback.html'
@@ -31,16 +31,13 @@ workbench_web_configuration = {
     'settingsSyncOptions': None,
     'enableWorkspaceTrust': True,
     'enabledExtensionProposedApi': [],  # must be an array (readonly ExtensionId[])
-    'folderUri': None,
-    # Boot straight into a persistent tmp: WORKSPACE (multi-root state).
-    # This is what makes folder switching LIVE: from WORKSPACE state
-    # updateWorkspaceFolders updates in place, whereas from EMPTY state the
-    # first addFolder forces createAndEnterWorkspace → full window reload,
-    # which would destroy the in-memory nodine container and its uploaded
-    # files. The workspace file lives in IndexedDB (tmp: provider), survives
-    # reloads, and is created eagerly by web.main.ts's isTemporaryWorkspace
-    # branch.
-    'workspaceUri': 'tmp:/nodine-workspace.workspace',
+    'folderUri': {'scheme': 'nodine', 'authority': 'Nodine', 'path': '/'},  # boot straight into the
+    # container root as THE workspace folder — the Explorer shows "Nodine" as
+    # the root (like C:\), users create their own folders under it. The
+    # webide-dev extension activates via onFileSystem:nodine BEFORE the folder
+    # is resolved, so the FS provider is registered in time (no ENOPRO, no
+    # "unable to resolve").
+    # workspaceUri: None,
     'productConfiguration': {
         'embedderIdentifier': 'vscode-web-static',
     },
@@ -111,19 +108,26 @@ def main():
         manifest_path.write_text(json.dumps(m, indent=2))
         print('fixed manifest.json icon paths')
 
-    # Install the browser shell shim (the build wipes out/browser/)
-    shim_src = Path('/home/z/my-project/web-ide-repo/assets/main.js')
+    # Install the browser shell shim (the build wipes out/browser/). The shim
+    # source lives in the repo's assets/ dir; if it is absent (fresh clone of
+    # an already-built tree) the committed shim in vscode-web is kept as-is.
+    shim_src = Path(__file__).resolve().parent.parent / 'assets/main.js'
     shim_dst = SITE / 'out/browser/esm/main.js'
-    shim_dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(shim_src, shim_dst)
-    print(f'installed browser shell shim → {shim_dst}')
+    if shim_src.exists():
+        shim_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(shim_src, shim_dst)
+        print(f'installed browser shell shim → {shim_dst}')
+    elif shim_dst.exists():
+        print('shim source not in repo — keeping the committed out/browser/esm/main.js')
+    else:
+        print('WARNING: no browser shell shim available — the site needs out/browser/esm/main.js')
 
     # Stage the nodine runtime + SDK (the build wipes /nodine too)
     nodine_dir = SITE / 'nodine'
     if not (nodine_dir / 'supervisor.mjs').exists():
         import subprocess
         subprocess.run(['node', 'scripts/stage-runtime.mjs', str(nodine_dir)],
-                       cwd='/home/z/my-project/nodine', check=True, capture_output=True)
+                       cwd=str(Path(__file__).resolve().parent.parent), check=True, capture_output=True)
         subprocess.run(['node', '-e', STAGE_SDK_SCRIPT], check=True)
         print('staged nodine runtime + sdk.mjs')
 

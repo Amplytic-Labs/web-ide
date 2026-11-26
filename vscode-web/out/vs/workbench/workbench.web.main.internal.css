@@ -70140,3 +70140,15 @@ body.issue-reporter-body {
  *   has been extended to include xterm CSI codes, among
  *   other features.
  */
+
+
+/* ===== Nodine UI overrides (patch_web_ui.py) ===== */
+/* 1. smaller top-left text logo (was 132px wide) */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {
+  width: 96px !important;
+  order: 2 !important;
+}
+/* 2. application-menu hamburger first, then the logo */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .menubar {
+  order: 1 !important;
+}

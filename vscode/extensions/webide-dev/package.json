@@ -21,6 +21,7 @@
     }
   },
   "activationEvents": [
+    "onFileSystem:nodine",
     "onStartupFinished"
   ],
   "browser": "./dist/browser/extensionMain",
@@ -88,7 +89,7 @@
     "viewsWelcome": [
       {
         "view": "webide-dev.welcome",
-        "contents": "Bring a project into the dev environment — real Node.js in your browser.\n[Upload Folder](command:webide-dev.uploadFolder)\n[Import from GitHub...](command:webide-dev.importGithub)\n[Open Dev Terminal](command:webide-dev.createTerminal)",
+        "contents": "Bring a project into the dev environment \u2014 real Node.js in your browser.\n[Upload Folder](command:webide-dev.uploadFolder)\n[Import from GitHub...](command:webide-dev.importGithub)\n[Open Dev Terminal](command:webide-dev.createTerminal)",
         "when": "webide-dev.noProject"
       }
     ],

@@ -5,6 +5,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -26,8 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/extensionMain.ts
+// src/extensionMain.ts
 var extensionMain_exports = {};
 __export(extensionMain_exports, {
   activate: () => activate,
@@ -38,7 +40,7 @@ __export(extensionMain_exports, {
 module.exports = __toCommonJS(extensionMain_exports);
 var vscode6 = __toESM(require("vscode"));
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/nodine.ts
+// src/nodine.ts
 var vscode = __toESM(require("vscode"));
 var containerPromise = null;
 var currentContainer = null;
@@ -83,12 +85,35 @@ async function bootContainer(runtimeUrl, workdirName = "project") {
   return containerPromise;
 }
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/fsProvider.ts
+// src/fsProvider.ts
 var vscode2 = __toESM(require("vscode"));
 var SCHEME = "nodine";
+var NODINE_ROOT = "nodine://Nodine/";
+function nodineRoot() {
+  return vscode2.Uri.parse(NODINE_ROOT);
+}
 var NodineFileSystemProvider = class {
-  constructor(container) {
-    this.container = container;
+  /**
+   * bolt.diy-style wiring: the provider is registered BEFORE the runtime
+   * boots and resolves the container lazily on every call. Any nodine:/
+   * request that arrives during the boot window waits for the container
+   * instead of failing with ENOPRO ("no file system provider found").
+   */
+  constructor(getContainer2) {
+    __publicField(this, "getContainer", getContainer2);
+    /** E2E diagnostic: how many times VS Code asked us to watch. */
+    __publicField(this, "watchCalls", 0);
+    // change events
+    __publicField(this, "_onDidChangeFile", new vscode2.EventEmitter());
+    __publicField(this, "onDidChangeFile", this._onDidChangeFile.event);
+  }
+  /** Resolve the container, or throw a VS Code-level "unavailable" error. */
+  async ready() {
+    const c = await this.getContainer();
+    if (!c) {
+      throw vscode2.FileSystemError.Unavailable("Dev environment is still booting (nodine runtime)");
+    }
+    return c;
   }
   toContainerPath(uri) {
     const rel = uri.path.replace(/^\/+/, "");
@@ -98,12 +123,13 @@ var NodineFileSystemProvider = class {
     return this._stat(this.toContainerPath(uri));
   }
   async _stat(p) {
+    const c = await this.ready();
     try {
-      await this.container.fs.readdir(p);
+      await c.fs.readdir(p);
       return { type: vscode2.FileType.Directory, ctime: 0, mtime: Date.now(), size: 0 };
     } catch {
       try {
-        const data = await this.container.fs.readFile(p);
+        const data = await c.fs.readFile(p);
         return { type: vscode2.FileType.File, ctime: 0, mtime: Date.now(), size: data.length };
       } catch {
         throw vscode2.FileSystemError.FileNotFound(p);
@@ -112,44 +138,53 @@ var NodineFileSystemProvider = class {
   }
   readDirectory(uri) {
     return (async () => {
+      const c = await this.ready();
       const p = this.toContainerPath(uri);
+      let raw;
       try {
-        const raw = await this.container.fs.readdir(p, { withFileTypes: true });
-        const out = [];
-        for (const e of raw) {
-          const name = typeof e === "string" ? e : e.name ?? String(e);
-          const isDir = typeof e === "object" && (e.isDirectory ?? (e.type ?? 2) === 2);
-          out.push([name, isDir ? vscode2.FileType.Directory : vscode2.FileType.File]);
-        }
-        if (out.length > 0 && out.every(([, t]) => t === vscode2.FileType.File) && out.some(([n]) => !n.includes("."))) {
-          const detailed = [];
-          for (const [name] of out) {
-            try {
-              await this.container.fs.readdir(`${p}/${name}`);
-              detailed.push([name, vscode2.FileType.Directory]);
-            } catch {
-              detailed.push([name, vscode2.FileType.File]);
-            }
-          }
-          return detailed;
-        }
-        return out;
+        raw = await c.fs.readdir(p, { withFileTypes: true });
       } catch (err) {
         throw vscode2.FileSystemError.FileNotFound(uri);
       }
+      const out = [];
+      const unknown = [];
+      for (const e of raw) {
+        const name = typeof e === "string" ? e : e.name ?? String(e);
+        const kind = typeof e === "object" && e !== null ? e.isDirectory ? "directory" : e._kind ?? (e.type === 2 ? "directory" : e.type === 1 ? "file" : void 0) : void 0;
+        if (kind === "directory") {
+          out.push([name, vscode2.FileType.Directory]);
+        } else if (kind === "file") {
+          out.push([name, vscode2.FileType.File]);
+        } else {
+          unknown.push(name);
+        }
+      }
+      for (const name of unknown) {
+        try {
+          await c.fs.readdir(`${p}/${name}`);
+          out.push([name, vscode2.FileType.Directory]);
+        } catch {
+          out.push([name, vscode2.FileType.File]);
+        }
+      }
+      return out;
     })();
   }
   readFile(uri) {
-    return this.container.fs.readFile(this.toContainerPath(uri)).catch(() => {
-      throw vscode2.FileSystemError.FileNotFound(uri);
-    });
+    return (async () => {
+      const c = await this.ready();
+      return c.fs.readFile(this.toContainerPath(uri)).catch(() => {
+        throw vscode2.FileSystemError.FileNotFound(uri);
+      });
+    })();
   }
   writeFile(uri, content, options) {
-    const p = this.toContainerPath(uri);
     return (async () => {
+      const c = await this.ready();
+      const p = this.toContainerPath(uri);
       if (!options.overwrite) {
         try {
-          await this.container.fs.readFile(p);
+          await c.fs.readFile(p);
           if (!options.overwrite) {
             throw vscode2.FileSystemError.FileExists(uri);
           }
@@ -159,25 +194,36 @@ var NodineFileSystemProvider = class {
           }
         }
       }
-      await this.container.fs.writeFile(p, content);
+      await c.fs.writeFile(p, content);
       this._fireDidChange(uri);
     })();
   }
   /** VS Code FileSystemProvider API: create a directory. */
   createDirectory(uri) {
-    const p = this.toContainerPath(uri);
     return (async () => {
-      await this.container.fs.mkdir(p, { recursive: true });
+      const c = await this.ready();
+      await c.fs.mkdir(this.toContainerPath(uri), { recursive: true });
       this._fireFileCreated(uri);
     })();
   }
+  /**
+   * bolt.diy-style event bridge: writes that bypass this provider (the
+   * upload/import helpers and the terminal write straight to the container
+   * FS) still must reach the workbench — without these events the Explorer
+   * tree keeps its cached root listing and never shows the new files.
+   */
+  fireExternalChange(type, containerPath) {
+    const uri = vscode2.Uri.parse(`${NODINE_ROOT}${containerPath.replace(/^\/+/, "")}`);
+    this._onDidChangeFile.fire([{ type, uri }]);
+  }
   async exists(p) {
+    const c = await this.ready();
     try {
-      await this.container.fs.readdir(p);
+      await c.fs.readdir(p);
       return true;
     } catch {
       try {
-        await this.container.fs.readFile(p);
+        await c.fs.readFile(p);
         return true;
       } catch {
         return false;
@@ -185,42 +231,49 @@ var NodineFileSystemProvider = class {
     }
   }
   delete(uri, options) {
-    const p = this.toContainerPath(uri);
     return (async () => {
+      const c = await this.ready();
+      const p = this.toContainerPath(uri);
       if (!await this.exists(p)) {
         throw vscode2.FileSystemError.FileNotFound(uri);
       }
-      await this.container.fs.rm(p, { recursive: options.recursive, force: true });
+      await c.fs.rm(p, { recursive: options.recursive, force: true });
       this._fireFileDeleted(uri);
     })();
   }
   rename(oldUri, newUri, options) {
     return (async () => {
+      const c = await this.ready();
       const from = this.toContainerPath(oldUri);
       const to = this.toContainerPath(newUri);
       if (!options.overwrite && await this.exists(to)) {
         throw vscode2.FileSystemError.FileExists(newUri);
       }
-      await this.container.fs.rename(from, to);
+      await c.fs.rename(from, to);
       this._fireFileDeleted(oldUri);
       this._fireFileCreated(newUri);
     })();
   }
   watch(uri) {
+    this.watchCalls++;
     const p = this.toContainerPath(uri);
     let watcher;
-    try {
-      watcher = this.container.fs.watch(p, (_event, filename) => {
-        const rel = filename.startsWith("/") ? filename : `/${filename}`;
-        this._fireDidChange(vscode2.Uri.joinPath(uri, rel.replace(/^\/+/, "")));
-      });
-    } catch {
-    }
+    this.ready().then((c) => {
+      try {
+        watcher = c.fs.watch(p, (_event, filename) => {
+          const dirty = (filename ?? "").startsWith("/") ? filename : `${p}/${filename ?? ""}`;
+          const parts = dirty.replace(/\/+$/, "").split("/");
+          parts.pop();
+          const parent = parts.join("/") || "/";
+          this._fireDidChange(vscode2.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: parent }));
+          this._fireDidChange(vscode2.Uri.from({ scheme: uri.scheme, authority: uri.authority, path: dirty }));
+        });
+      } catch {
+      }
+    }).catch(() => {
+    });
     return new vscode2.Disposable(() => watcher?.close());
   }
-  // change events
-  _onDidChangeFile = new vscode2.EventEmitter();
-  onDidChangeFile = this._onDidChangeFile.event;
   _fireDidChange(uri) {
     this._onDidChangeFile.fire([{ type: vscode2.FileChangeType.Changed, uri }]);
   }
@@ -235,7 +288,7 @@ var NodineFileSystemProvider = class {
   }
 };
 async function openNodineWorkspace(_container) {
-  const folderUri = vscode2.Uri.parse(`${SCHEME}:/`);
+  const folderUri = nodineRoot();
   const existing = vscode2.workspace.workspaceFolders;
   const already = existing?.some((f) => f.uri.scheme === SCHEME);
   if (already) {
@@ -251,57 +304,82 @@ async function openNodineWorkspace(_container) {
   }
 }
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/terminal.ts
+// src/terminal.ts
 var vscode3 = __toESM(require("vscode"));
+var afterCommandHook = null;
+var hookFireCount = 0;
+function setAfterCommandHook(fn) {
+  afterCommandHook = fn;
+}
+function getHookFireCount() {
+  return hookFireCount;
+}
 var NodineTerminal = class {
   constructor(runtimeUrl) {
-    this.runtimeUrl = runtimeUrl;
+    __publicField(this, "runtimeUrl", runtimeUrl);
+    __publicField(this, "writeEmitter", new vscode3.EventEmitter());
+    __publicField(this, "onDidWrite", this.writeEmitter.event);
+    __publicField(this, "closeEmitter", new vscode3.EventEmitter());
+    __publicField(this, "onDidClose", this.closeEmitter.event);
+    __publicField(this, "container", null);
+    __publicField(this, "current", null);
+    __publicField(this, "inputWriter", null);
+    __publicField(this, "buffer", "");
+    __publicField(this, "running", false);
+    /** cwd for spawned commands — starts at the container root (Explorer root). */
+    __publicField(this, "cwd", null);
+    /** whether the last fired output ended with a newline (prompt placement) */
+    __publicField(this, "atLineStart", true);
+    __publicField(this, "nodeVersionCache", null);
   }
-  writeEmitter = new vscode3.EventEmitter();
-  onDidWrite = this.writeEmitter.event;
-  closeEmitter = new vscode3.EventEmitter();
-  onDidClose = this.closeEmitter.event;
-  container = null;
-  current = null;
-  inputWriter = null;
-  buffer = "";
-  running = false;
-  /** cwd for spawned commands — the project folder once one is uploaded. */
-  cwd = null;
-  /** Point the shell at a project folder (e.g. "/my-app"). */
+  /** Point the shell at a project folder (e.g. "/my-app"). Silent pre-boot. */
   cd(path) {
-    this.cwd = path;
-    this.writeEmitter.fire(`\x1B[90mcd ${path}\x1B[0m\r
-`);
-    this.prompt();
+    if (path) {
+      this.cwd = path.replace(/\/+$/, "") || "/";
+    } else {
+      this.cwd = "/";
+    }
+    if (this.container) {
+      this.prompt();
+    }
   }
-  /** Absolute directory commands run in: project folder if set, else workdir. */
+  /** Absolute directory commands run in: cwd (default the container root). */
   resolveCwd(container) {
-    return this.cwd ?? container.workdir;
+    return this.cwd ?? "/";
+  }
+  /** All output goes through here: bare \n → \r\n (no staircase output). */
+  write(data) {
+    const norm = data.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+    this.atLineStart = norm.endsWith("\r\n") || norm.endsWith("\n");
+    this.writeEmitter.fire(norm);
+  }
+  /** ANSI: clear viewport + scrollback + home (real `clear`). */
+  clearScreen() {
+    this.writeEmitter.fire("\x1B[2J\x1B[3J\x1B[H");
+    this.atLineStart = true;
   }
   async open(_initialDimensions) {
-    this.writeEmitter.fire("Booting dev environment (nodine: real Node.js in your browser)\u2026\r\n");
+    this.clearScreen();
+    this.write("\x1B[90mstarting dev environment\u2026\x1B[0m\r\n");
     try {
       this.container = await bootContainer(this.runtimeUrl);
-      console.log("[webide-dev] terminal: container ready");
     } catch (err) {
       console.error("[webide-dev] runtime boot failed:", err);
-      this.writeEmitter.fire(`\x1B[31mFailed to boot runtime: ${err}\x1B[0m\r
-`);
-      this.writeEmitter.fire("The host must send COOP: same-origin + COEP: credentialless headers.\r\n");
+      this.write("\x1B[31mfailed to start the dev environment (the host must send cross-origin isolation headers).\x1B[0m\r\n");
       this.closeEmitter.fire(1);
       return;
     }
     const version = await this.nodeVersion();
-    console.log("[webide-dev] terminal: node version =", version);
-    this.writeEmitter.fire(`\x1B[32mready\x1B[0m \u2014 Node.js ${version} dev environment in ${this.resolveCwd(this.container)}\r
+    this.clearScreen();
+    if (version) {
+      this.write(`Node.js ${version}\r
+\r
 `);
-    this.writeEmitter.fire("Line-based shell: type JS to evaluate, or run `npm <cmd>`, `node <file>`.\r\n\r\n");
+    }
     this.prompt();
   }
-  nodeVersionCache = null;
   async nodeVersion() {
-    if (this.nodeVersionCache) {
+    if (this.nodeVersionCache !== null) {
       return this.nodeVersionCache;
     }
     try {
@@ -330,20 +408,22 @@ var NodineTerminal = class {
           await proc.kill();
         } catch {
         }
-        this.nodeVersionCache = "(probe timed out)";
+        this.nodeVersionCache = null;
       } else {
-        this.nodeVersionCache = out.trim() || "(no output)";
+        this.nodeVersionCache = out.trim().replace(/^['"]|['"]$/g, "") || null;
       }
-      console.log("[webide-dev] nodeVersion probe:", JSON.stringify(this.nodeVersionCache), "code:", code);
-    } catch (err) {
-      console.error("[webide-dev] nodeVersion probe failed:", err);
-      this.nodeVersionCache = "(unknown)";
+    } catch {
+      this.nodeVersionCache = null;
     }
     return this.nodeVersionCache;
   }
   prompt() {
-    const where = this.cwd ?? (this.container ? this.resolveCwd(this.container) : "");
-    this.writeEmitter.fire(`\x1B[36m${where || "node"}>\x1B[0m `);
+    const where = this.cwd ?? "/";
+    if (!this.atLineStart) {
+      this.writeEmitter.fire("\r\n");
+      this.atLineStart = true;
+    }
+    this.writeEmitter.fire(`\x1B[36m${where}\x1B[0m \u276F `);
   }
   /** `cd <dir>` builtin: resolve relative to the current cwd and switch. */
   changeDir(arg) {
@@ -351,13 +431,17 @@ var NodineTerminal = class {
       return;
     }
     const base = this.resolveCwd(this.container);
+    let next;
     if (!arg || arg === "~") {
-      this.cwd = this.container.workdir;
+      next = this.container.workdir;
+    } else if (arg === "/" || arg === "-") {
+      next = "/";
     } else if (arg.startsWith("/")) {
-      this.cwd = arg.replace(/\/+$/, "") || "/";
+      next = arg;
     } else {
-      this.cwd = `${base}/${arg}`.replace(/\/+$/, "");
+      next = `${base}/${arg}`;
     }
+    this.cwd = next.replace(/\/+$/, "") || "/";
     this.prompt();
   }
   handleInput(data) {
@@ -372,7 +456,7 @@ var NodineTerminal = class {
       if (ch === "\r") {
         const line = this.buffer;
         this.buffer = "";
-        this.writeEmitter.fire("\r\n");
+        this.write("\r\n");
         void this.runLine(line);
         return;
       } else if (ch === "\x7F") {
@@ -382,7 +466,7 @@ var NodineTerminal = class {
         }
       } else if (ch === "") {
         this.buffer = "";
-        this.writeEmitter.fire("^C\r\n");
+        this.write("^C\r\n");
         this.prompt();
       } else if (ch >= " ") {
         this.buffer += ch;
@@ -401,7 +485,7 @@ var NodineTerminal = class {
       return;
     }
     if (argv[0] === "clear") {
-      this.writeEmitter.fire("\x1B[2J\x1B[H");
+      this.clearScreen();
       this.prompt();
       return;
     }
@@ -410,7 +494,13 @@ var NodineTerminal = class {
       return;
     }
     if (argv[0] === "pwd") {
-      this.writeEmitter.fire(`${this.resolveCwd(container)}\r
+      this.write(`${this.resolveCwd(container)}\r
+`);
+      this.prompt();
+      return;
+    }
+    if (argv[0] === "echo") {
+      this.write(`${argv.slice(1).join(" ")}\r
 `);
       this.prompt();
       return;
@@ -419,79 +509,91 @@ var NodineTerminal = class {
       this.closeEmitter.fire(0);
       return;
     }
+    if (argv[0] === ">") {
+      const code = line.replace(/^\s*>\s*/, "");
+      if (!code) {
+        this.prompt();
+        return;
+      }
+      this.running = true;
+      try {
+        const proc = await container.spawn("node", ["-e", replWrap(code)], {
+          cwd: this.resolveCwd(container),
+          env: { ...container.baseEnv }
+        });
+        this.current = proc;
+        await this.pump(proc, container);
+      } finally {
+        this.finishCommand();
+      }
+      return;
+    }
     this.running = true;
     try {
       let proc;
-      const evalCode = (code2) => `(function(){const __r=eval(${JSON.stringify(code2)});if(__r!==undefined)console.log(__r)})()`;
       if (argv[0] === "node") {
-        if (argv.length > 1 && !argv[1].startsWith("-")) {
-          proc = await container.spawn("node", argv.slice(1), {
-            cwd: this.resolveCwd(container),
-            env: { ...container.baseEnv }
-          });
-        } else {
-          const code2 = argv.slice(1).join(" ");
-          if (!code2) {
-            this.prompt();
-            this.running = false;
-            return;
-          }
-          proc = await container.spawn("node", ["-e", evalCode(code2)], {
-            cwd: this.resolveCwd(container),
-            env: { ...container.baseEnv }
-          });
+        if (argv.length === 1) {
+          this.write('\x1B[90musage: node <file.js> \xB7 node -v \xB7 node -e "<code>"\x1B[0m\r\n');
+          return;
         }
-      } else if (argv[0] === "npm" || argv[0] === "npx") {
-        proc = await container.spawn(argv[0], argv.slice(1), {
-          cwd: this.resolveCwd(container),
-          env: { ...container.baseEnv, npm_config_progress: "false", npm_config_loglevel: "info" }
-        });
-      } else if (argv[0] === "ls" || argv[0] === "cat" || argv[0] === "pwd" || argv[0] === "mkdir" || argv[0] === "grep" || argv[0] === "wc" || argv[0] === "head" || argv[0] === "sh") {
-        proc = await container.spawn(argv[0], argv.slice(1), {
+        proc = await container.spawn("node", argv.slice(1), {
           cwd: this.resolveCwd(container),
           env: { ...container.baseEnv }
         });
       } else {
-        proc = await container.spawn("node", ["-e", evalCode(line)], {
+        proc = await container.spawn(argv[0], argv.slice(1), {
           cwd: this.resolveCwd(container),
-          env: { ...container.baseEnv }
+          env: { ...container.baseEnv, ...argv[0] === "npm" || argv[0] === "npx" ? { npm_config_progress: "false", npm_config_loglevel: "info" } : {} }
         });
       }
       this.current = proc;
       this.inputWriter = proc.input ? proc.input.getWriter() : null;
-      if (proc.output) {
-        const reader = proc.output.getReader();
-        try {
-          for (; ; ) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            this.writeEmitter.fire(value);
-          }
-        } catch {
-        }
-      }
-      const code = await proc.exit;
-      if (code !== 0) {
-        this.writeEmitter.fire(`\x1B[90m(exit ${code})\x1B[0m\r
-`);
-      }
+      await this.pump(proc, container);
     } catch (err) {
-      this.writeEmitter.fire(`\x1B[31m${err}\x1B[0m\r
+      const msg = String(err).split("\n")[0].replace(/^FileSystemError:\s*/, "");
+      this.write(`\x1B[31m${msg}\x1B[0m\r
 `);
     } finally {
-      this.running = false;
-      this.current = null;
-      if (this.inputWriter) {
-        try {
-          await this.inputWriter.close();
-        } catch {
-        }
-        this.inputWriter = null;
-      }
-      this.prompt();
+      this.finishCommand();
     }
+  }
+  /** Stream a process's output into the terminal, CR-normalized. */
+  async pump(proc, container) {
+    if (proc.output) {
+      const reader = proc.output.getReader();
+      try {
+        for (; ; ) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          this.write(value);
+        }
+      } catch {
+      }
+    }
+    const code = await proc.exit;
+    if (code !== 0) {
+      this.write(`\x1B[90m(exit ${code})\x1B[0m\r
+`);
+    }
+  }
+  finishCommand() {
+    this.running = false;
+    this.current = null;
+    if (this.inputWriter) {
+      try {
+        void this.inputWriter.close();
+      } catch {
+      }
+      this.inputWriter = null;
+    }
+    try {
+      hookFireCount++;
+      afterCommandHook?.();
+    } catch {
+    }
+    this.prompt();
   }
   setDimensions(_dimensions) {
   }
@@ -511,6 +613,9 @@ var NodineTerminal = class {
     }
   }
 };
+function replWrap(code) {
+  return `(function(){const __r=eval(${JSON.stringify(code)});if(__r!==undefined)console.log(__r)})()`;
+}
 function tokenize(line) {
   const out = [];
   let cur = "";
@@ -585,8 +690,8 @@ function focusDevTerminal(context) {
   return terminal;
 }
 var NodineProfileProvider = class {
-  runtimeUrl;
   constructor(runtimeUrl) {
+    __publicField(this, "runtimeUrl");
     this.runtimeUrl = runtimeUrl;
   }
   provideTerminalProfile(_token) {
@@ -596,7 +701,7 @@ var NodineProfileProvider = class {
   }
 };
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/githubImport.ts
+// src/githubImport.ts
 var vscode4 = __toESM(require("vscode"));
 var IGNORE_SEGMENTS = /* @__PURE__ */ new Set([
   "node_modules",
@@ -726,11 +831,12 @@ async function importFromGithub(inputs, writeFile, ensureDir, reveal) {
             const blob = await ghApi(`/repos/${owner}/${repo}/git/blobs/${node.sha}`, token);
             const contents = blob.encoding === "base64" ? base64ToBytes(blob.content) : new TextEncoder().encode(blob.content);
             const dir = node.path.split("/").slice(0, -1).join("/");
-            if (dir && !dirs.has(dir)) {
-              await ensureDir(dir);
-              dirs.add(dir);
+            const destDir = dir ? `${owner}-${repo}/${dir}` : `${owner}-${repo}`;
+            if (!dirs.has(destDir)) {
+              await ensureDir(destDir);
+              dirs.add(destDir);
             }
-            await writeFile(node.path, contents);
+            await writeFile(`${owner}-${repo}/${node.path}`, contents);
             imported++;
           } catch (err) {
             failed++;
@@ -763,7 +869,7 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/folderUpload.ts
+// src/folderUpload.ts
 var vscode5 = __toESM(require("vscode"));
 var IGNORE_DIRS = /* @__PURE__ */ new Set([
   "node_modules",
@@ -895,16 +1001,16 @@ async function uploadFolder(writeFile, ensureDir, reveal, prepareRuntime) {
   });
 }
 
-// ../../../tmp/web-ide/vscode/extensions/webide-dev/src/extensionMain.ts
+// src/extensionMain.ts
 var RunOnceTerminal = class {
   constructor(container, relPath) {
-    this.container = container;
-    this.relPath = relPath;
+    __publicField(this, "container", container);
+    __publicField(this, "relPath", relPath);
+    __publicField(this, "writeEmitter", new vscode6.EventEmitter());
+    __publicField(this, "onDidWrite", this.writeEmitter.event);
+    __publicField(this, "closeEmitter", new vscode6.EventEmitter());
+    __publicField(this, "onDidClose", this.closeEmitter.event);
   }
-  writeEmitter = new vscode6.EventEmitter();
-  onDidWrite = this.writeEmitter.event;
-  closeEmitter = new vscode6.EventEmitter();
-  onDidClose = this.closeEmitter.event;
   async open() {
     try {
       const proc = await this.container.spawn("node", [this.relPath], {
@@ -977,25 +1083,7 @@ async function activate(_context) {
           return null;
         }
         try {
-          const container = await bootContainer(runtimeUrl);
-          const provider = new NodineFileSystemProvider(container);
-          const simulateUpload = async (folderName) => {
-            const fs = await getFs();
-            if (!fs) {
-              return "no-runtime";
-            }
-            await fs.ensureDir(folderName);
-            await fs.writeFile(`${folderName}/package.json`, new TextEncoder().encode(
-              JSON.stringify({ name: folderName, version: "1.0.0", scripts: { start: "node index.js" } }, null, 2)
-            ));
-            await fs.writeFile(`${folderName}/index.js`, new TextEncoder().encode('console.log("hello from ' + folderName + '");\n'));
-            await projectReady(folderName);
-            return "ok";
-          };
-          vscode6.commands.registerCommand("webide-dev._simulateUpload", simulateUpload);
-          globalThis.__webideDevTest = { simulateUpload };
-          _context.subscriptions.push(vscode6.workspace.registerFileSystemProvider("nodine", provider, { isCaseSensitive: true }));
-          return container;
+          return await bootContainer(runtimeUrl);
         } catch (err) {
           console.error("[webide-dev] runtime boot failed:", err);
           readyPromise = null;
@@ -1006,44 +1094,45 @@ async function activate(_context) {
     }
     return readyPromise;
   };
-  const openNodineWorkspaceOnce = async () => {
-    const existing = vscode6.workspace.workspaceFolders?.find((f) => f.uri.scheme === "nodine");
-    if (existing) {
-      return;
-    }
-    await openNodineWorkspace(await ensureRuntime());
-  };
-  openNodineWorkspaceOnce().then(() => {
-    const setDefaultProfile = (target) => Promise.allSettled([
-      vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.linux", "Nodine (Node.js)", target),
-      vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.osx", "Nodine (Node.js)", target)
-    ]);
-    void setDefaultProfile(vscode6.ConfigurationTarget.Workspace).then((results) => {
-      const failed = results.some((r) => r.status === "rejected");
-      if (failed) {
-        void setDefaultProfile(vscode6.ConfigurationTarget.Global);
-      }
-    });
+  const runtimeReady = ensureRuntime();
+  const provider = new NodineFileSystemProvider(async () => {
+    await runtimeReady;
+    return getContainer();
+  });
+  let providerRegistered = false;
+  _context.subscriptions.push(vscode6.workspace.registerFileSystemProvider("nodine", provider, { isCaseSensitive: true }));
+  providerRegistered = true;
+  setAfterCommandHook(() => {
+    provider.fireExternalChange(vscode6.FileChangeType.Created, "/.nodine-sync");
   });
   const getFs = async () => {
     const container = await ensureRuntime();
     if (!container) {
       return null;
     }
+    const fire = (type, p) => provider.fireExternalChange(type, `/${p}`);
     return {
       // p is a project-relative path ("<folderName>/src/a.js"); write it
       // at the container root: /<folderName>/src/a.js
       writeFile: async (p, contents) => {
         const dir = p.split("/").slice(0, -1).join("/");
         if (dir) {
-          await container.fs.mkdir(`/${dir}`, { recursive: true }).catch(() => {
-          });
+          try {
+            await container.fs.mkdir(`/${dir}`, { recursive: true });
+            fire(vscode6.FileChangeType.Created, dir);
+          } catch {
+          }
         }
         await container.fs.writeFile(`/${p}`, contents);
+        fire(vscode6.FileChangeType.Changed, p);
+        fire(vscode6.FileChangeType.Changed, dir);
       },
       ensureDir: async (p) => {
-        await container.fs.mkdir(`/${p}`, { recursive: true }).catch(() => {
-        });
+        try {
+          await container.fs.mkdir(`/${p}`, { recursive: true });
+          fire(vscode6.FileChangeType.Created, p);
+        } catch {
+        }
       }
     };
   };
@@ -1054,8 +1143,78 @@ async function activate(_context) {
     }
     return fs;
   };
+  const simulateUpload = async (folderName) => {
+    const fs = await getFs();
+    if (!fs) {
+      return "no-runtime";
+    }
+    await fs.ensureDir(folderName);
+    await fs.writeFile(`${folderName}/package.json`, new TextEncoder().encode(
+      JSON.stringify({ name: folderName, version: "1.0.0", scripts: { start: "node index.js" } }, null, 2)
+    ));
+    await fs.writeFile(`${folderName}/index.js`, new TextEncoder().encode('console.log("hello from ' + folderName + '");\n'));
+    await projectReady(folderName);
+    return "ok";
+  };
+  vscode6.commands.registerCommand("webide-dev._simulateUpload", simulateUpload);
+  globalThis.__webideDevTest = {
+    simulateUpload,
+    provider,
+    state: async () => ({
+      activated: true,
+      providerRegistered,
+      watchCalls: provider.watchCalls,
+      hookFired: getHookFireCount(),
+      activationEvents: vscode6.extensions.getExtension("amplytic.webide-dev")?.packageJSON?.activationEvents ?? null,
+      folders: (vscode6.workspace.workspaceFolders ?? []).map((f) => ({ uri: f.uri.toString(), name: f.name })),
+      readdirViaFs: await (async () => {
+        try {
+          const ents = await vscode6.workspace.fs.readDirectory(nodineRoot());
+          return ents.map(([n, t]) => n + (t === vscode6.FileType.Directory ? "/" : "")).join(",");
+        } catch (e) {
+          return "ERR:" + String(e).slice(0, 90);
+        }
+      })(),
+      readdirRoot: await (async () => {
+        try {
+          const c = await ensureRuntime();
+          return c ? (await c.fs.readdir("/")).join(",") : "no-container";
+        } catch (e) {
+          return "err:" + String(e).slice(0, 80);
+        }
+      })()
+    })
+  };
+  const openNodineWorkspaceOnce = async () => {
+    const existing = vscode6.workspace.workspaceFolders?.find((f) => f.uri.scheme === "nodine");
+    if (existing) {
+      return;
+    }
+    await openNodineWorkspace();
+  };
+  const seedExplorerSettings = async () => {
+    const settingsUri = vscode6.Uri.joinPath(nodineRoot(), ".vscode/settings.json");
+    try {
+      await vscode6.workspace.fs.readFile(settingsUri);
+      return;
+    } catch {
+    }
+    const payload = JSON.stringify({
+      "files.exclude": {
+        "bin": true,
+        "home": true,
+        "project": true,
+        "root": true,
+        "tmp": true,
+        "usr": true,
+        ".vscode": true
+      }
+    }, null, 2);
+    await vscode6.workspace.fs.writeFile(settingsUri, new TextEncoder().encode(payload + "\n"));
+  };
   const reveal = async (_folderName) => {
-    await vscode6.commands.executeCommand("revealInExplorer", vscode6.Uri.parse("nodine:/"));
+    await vscode6.commands.executeCommand("revealInExplorer", nodineRoot());
+    provider.fireExternalChange(vscode6.FileChangeType.Created, "/.nodine-sync");
     vscode6.commands.executeCommand("workbench.view.explorer");
   };
   const collectGithubInputs = async () => {
@@ -1084,6 +1243,29 @@ async function activate(_context) {
     await focusDevTerminal(_context);
     await reveal(folderName);
   };
+  runtimeReady.then(async (container) => {
+    if (!container) {
+      return;
+    }
+    try {
+      await openNodineWorkspaceOnce();
+      syncNoProject();
+      await seedExplorerSettings();
+      const setDefaultProfile = (target) => Promise.allSettled([
+        vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.linux", "Nodine (Node.js)", target),
+        vscode6.workspace.getConfiguration("terminal.integrated").update("defaultProfile.osx", "Nodine (Node.js)", target)
+      ]);
+      void setDefaultProfile(vscode6.ConfigurationTarget.Workspace).then((results) => {
+        const failed = results.some((r) => r.status === "rejected");
+        if (failed) {
+          void setDefaultProfile(vscode6.ConfigurationTarget.Global);
+        }
+      });
+      await focusDevTerminal(_context);
+    } catch (err) {
+      console.error("[webide-dev] auto workspace/terminal failed:", err);
+    }
+  });
   _context.subscriptions.push(
     vscode6.commands.registerCommand("webide-dev.createTerminal", () => {
       createDevTerminal(_context);
