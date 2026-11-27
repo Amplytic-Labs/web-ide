@@ -72,6 +72,21 @@
 		</div>
 		<p class="muted" id="modeNote"></p>
 		<div id="frameWrap"><iframe id="appFrame" title="preview"></iframe></div>
+	<script>
+	(function () {
+		window.__navLog = [];
+		document.addEventListener('DOMContentLoaded', function () {
+			var f = document.getElementById('appFrame');
+			f.addEventListener('load', function () {
+				var rec = { ev: 'load', src: f.src };
+				try { rec.href = f.contentWindow.location.href; rec.text = (f.contentDocument.body ? f.contentDocument.body.textContent : '').slice(0, 60); } catch (e) { rec.cross = String(e).slice(0, 60); }
+				window.__navLog.push(rec);
+				console.error('[guest-frame] ' + JSON.stringify(rec));
+			});
+			f.addEventListener('error', function () { window.__navLog.push({ ev: 'error', src: f.src }); });
+		});
+	})();
+	</script>
 	</div>
 </main>
 
@@ -215,7 +230,12 @@ async function onConnected() {
 			navigator.serviceWorker.addEventListener('message', function (ev) {
 				var m = ev.data || {};
 				if (m.t !== 'swfetch') return;
+				window.__swfetchLog = window.__swfetchLog || [];
+				window.__swfetchLog.push({ path: m.path, reqId: m.reqId, at: Date.now() });
+				console.error('[guest-swfetch] ' + m.path + ' reqId=' + m.reqId);
 				dcRequest(m.method, m.path, null).then(function (r) {
+					window.__swfetchLog.push({ path: m.path, done: true, status: r.status, err: r.err || null, at: Date.now() });
+					console.error('[guest-swfetch-done] ' + m.path + ' status=' + r.status + ' err=' + (r.err || 'none'));
 					var body = r.body;
 					var ctype = r.headers['content-type'] || '';
 					if (ctype.indexOf('text/html') >= 0 && r.status === 200) {
