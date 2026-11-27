@@ -56,6 +56,11 @@
         "command": "webide-dev.createNodineTerminal",
         "title": "Create Nodine Terminal",
         "category": "Web IDE"
+      },
+      {
+        "command": "webide-dev.shareLan",
+        "title": "Share Dev Server on LAN (QR)...",
+        "category": "Web IDE"
       }
     ],
     "menus": {

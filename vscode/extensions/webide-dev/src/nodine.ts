@@ -116,6 +116,8 @@ export async function bootContainer(runtimeUrl: string, workdirName = 'project')
 			const mod: NodineModule = await import(/* @vite-ignore */ sdkUrl);
 			const container = await mod.Container.boot({ runtimeUrl: absRuntimeUrl, coep: 'credentialless', workdirName });
 			currentContainer = container;
+			(container as any).__bootTag = 'boot-' + Math.random().toString(36).slice(2, 8);
+			console.error('[webide-dev] bootContainer created', (container as any).__bootTag);
 			return container;
 		})().catch(err => {
 			containerPromise = null;

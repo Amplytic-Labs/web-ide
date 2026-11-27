@@ -16,5 +16,8 @@ run({
 	outdir: outDir,
 	additionalOptions: {
 		tsconfig: path.join(import.meta.dirname, 'tsconfig.browser.json'),
+		// vendor/*.qrjs are raw text assets (vendored third-party libs injected
+		// into the LAN-share webview HTML)
+		loader: { '.qrjs': 'text' },
 	},
 }, process.argv);

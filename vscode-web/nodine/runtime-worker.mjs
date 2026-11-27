@@ -166,6 +166,19 @@ function installPreviewSWPort(port) {
   PREVIEW_SW_PORT_READY = Promise.resolve();
 }
 const PREVIEW_SW_GONE_HOOKS = []; // http factory registers its cleanup here
+// 0.5.2 (LAN-SHARE): the supervisor can attach the preview bridge AFTER this
+// worker spawned (the share command opened while a dev server already runs).
+// It then sends 'preview-sw-port' on CHANNEL_PORT with the per-worker preview
+// port transferred — install it and let the http factory re-register any
+// dark-listened servers on the now-live bridge.
+const PREVIEW_BRIDGE_LIVE_HOOKS = []; // http factory registers its re-registration here
+function handlePreviewSwPortMsg(ev) {
+  const port = ev && ev.ports && ev.ports[0];
+  if (!port) return;
+  const had = !!PREVIEW_SW_PORT;
+  installPreviewSWPort(port);
+  if (!had) PREVIEW_BRIDGE_LIVE_HOOKS.forEach((h) => { try { h(); } catch {} });
+}
 // Platform MessageChannel + onmessage setter, captured BEFORE the bootstrap
 // chain replaces the globals (Node's EventTarget onmessage setter throws
 // ERR_INVALID_THIS for platform MessagePorts — observed live in B1 E2E).
@@ -6952,6 +6965,18 @@ function bridgeHttpFactory(isHttps) {
       }
       previewPorts.delete(portNo);
     });
+    // 0.5.2 (LAN-SHARE): the bridge may come live AFTER listen() dark-listened
+    // (the share panel attached while a dev server was already running).
+    // Re-register every dark server on the bridge so the running server
+    // becomes reachable without a restart. listenViaSW re-adds the server to
+    // darkServers on ack ("uniform close() bookkeeping"), so drop the entry
+    // here to avoid double-registration.
+    PREVIEW_BRIDGE_LIVE_HOOKS.push(() => {
+      for (const [portNo, srv] of [...darkServers]) {
+        if (!srv || !srv.listening) { darkServers.delete(portNo); continue; }
+        if (listenViaSW(portNo, srv)) darkServers.delete(portNo);
+      }
+    });
 
     // A preview request arriving on a per-port channel: parse head+body,
     // open a VirtualSocket + HTTP1Connection (the per-request parser),
@@ -6979,12 +7004,13 @@ function bridgeHttpFactory(isHttps) {
         try { rec.chan.postMessage(msg); } catch {} // CLONE only — buffers may
         // be views into kernel shared memory; transferring would detach KSM.
       };
-      sock._send = (b) => send({ type: 'preview-res', id: cid, bytes: b });
+      sock._send = (b) => { try { console.error('[nodine-preview] res chunk', cid, b.length); } catch {} send({ type: 'preview-res', id: cid, bytes: b }); };
       // end-of-response: VirtualSocket.end fires on res.end with
       // Connection: close; keep-alive responses rely on the finish patch.
       const finishOnce = () => {
         if (sock.__previewDone) return;
         sock.__previewDone = true;
+        try { console.error('[nodine-preview] res end', cid); } catch {}
         rec.conns.delete(cid);
         server._conns.delete(cid);
         server._httpConnections.delete(cid);
@@ -7057,8 +7083,8 @@ function bridgeHttpFactory(isHttps) {
         platformArmPort(port1, (cev) => {
           const m = cev.data;
           if (!m || typeof m !== 'object') return;
-          if (m.type === 'preview-open-ack') { rec.ackWaiter && rec.ackWaiter(); return; }
-          if (m.type === 'preview-req') { onPreviewChanMsg(rec, m); return; }
+          if (m.type === 'preview-open-ack') { try { console.error('[nodine-preview] ack on :' + port); } catch {} rec.ackWaiter && rec.ackWaiter(); return; }
+          if (m.type === 'preview-req') { try { console.error('[nodine-preview] req', m.id, String(m.head || '').split('\r\n')[0]); } catch {} onPreviewChanMsg(rec, m); return; }
         });
         // Ask the SW (via supervisor forward) to register this port; the SW
         // acks ON THIS CHANNEL (queued even if we get there first).
@@ -8034,6 +8060,7 @@ async function main() {
       // piped too — the supervisor routes targeted stdin-bytes here while
       // this process owns the terminal, bypassing the kernel broadcast.
       const fd0Piped = globalThis.__stdinOwned || (globalThis.__nodineStdioArr ? globalThis.__nodineStdioArr[0] === 'pipe' : STDIO_MODE === 'pipe');
+      if (m.type === 'preview-sw-port') { handlePreviewSwPortMsg(ev); return; }
       if (m.type === 'stdin-own') {
         // B9 TERMINAL-OWNER: grant/revoke terminal-stdin ownership. While
         // owned, fd-0 reads come from the channel queue (targeted bytes)
@@ -8396,6 +8423,7 @@ async function waitForQuit() {
         // piped with fd1/2 inherited must still receive stdin-bytes.
         // B9: 'stdin-own' handled here too (post-handshake dispatcher).
         const fd0Piped = globalThis.__stdinOwned || (globalThis.__nodineStdioArr ? globalThis.__nodineStdioArr[0] === 'pipe' : STDIO_MODE === 'pipe');
+        if (m.type === 'preview-sw-port') { handlePreviewSwPortMsg(ev); return; }
         if (m.type === 'stdin-own') {
           globalThis.__stdinOwned = !!m.own;
           if (m.own) deliverStdinToWaiters();

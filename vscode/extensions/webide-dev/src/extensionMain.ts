@@ -7,6 +7,7 @@ import { NodineFileSystemProvider, nodineRoot, openNodineWorkspace } from './fsP
 import { createDevTerminal, focusDevTerminal, NodineProfileProvider, setAfterCommandHook, getHookFireCount } from './terminal';
 import { importFromGithub } from './githubImport';
 import { uploadFolder } from './folderUpload';
+import { shareOnLan } from './lanShare';
 
 /** A pseudoterminal that runs one command (`node <file>`) and exits. */
 class RunOnceTerminal implements vscode.Pseudoterminal {
@@ -57,6 +58,7 @@ export function getProjectCwd(): string | null {
 }
 
 export async function activate(_context: vscode.ExtensionContext): Promise<void> {
+	console.error('[webide-dev] activate: registering commands');
 	// Context key: true while no nodine project is loaded — drives the
 	// explorer "Dev Environment" welcome view visibility.
 	const syncNoProject = () => {
@@ -451,5 +453,7 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 			const url = container.previewUrl(port);
 			await vscode.env.openExternal(vscode.Uri.parse(url));
 		}),
+
+		vscode.commands.registerCommand('webide-dev.shareLan', () => shareOnLan()),
 	);
 }

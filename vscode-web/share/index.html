@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nodine LAN preview</title>
+<style>
+	:root { color-scheme: light dark; }
+	* { box-sizing: border-box; }
+	body {
+		margin: 0; font-family: system-ui, -apple-system, sans-serif;
+		background: #0d1117; color: #e6edf3;
+		min-height: 100vh; display: flex; flex-direction: column;
+	}
+	header { padding: 12px 16px; border-bottom: 1px solid #21262d; }
+	h1 { font-size: clamp(15px, 4vw, 18px); margin: 0 0 2px; }
+	.sub { margin: 0; font-size: 12px; color: #8b949e; }
+	main { flex: 1; display: flex; flex-direction: column; padding: 14px 16px; gap: 12px; max-width: 760px; width: 100%; margin: 0 auto; }
+	.card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px 16px; }
+	.card h2 { font-size: 14px; margin: 0 0 8px; }
+	.muted { color: #8b949e; font-size: 12px; margin: 4px 0 0; }
+	code, textarea, .codebox { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+	textarea {
+		width: 100%; min-height: 90px; resize: vertical; word-break: break-all;
+		background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+		border-radius: 6px; padding: 8px;
+	}
+	.codebox { word-break: break-all; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; max-height: 90px; overflow: auto; color: #79c0ff; }
+	button {
+		font: inherit; font-size: 13px; cursor: pointer; margin-top: 8px;
+		background: #238636; color: #fff; border: none; border-radius: 6px; padding: 8px 16px;
+	}
+	button.secondary { background: #21262d; border: 1px solid #30363d; color: #e6edf3; }
+	button:disabled { opacity: .5; cursor: default; }
+	#status { font-weight: 600; font-size: 13px; margin: 0; }
+	#status.ok { color: #3fb950; } #status.err { color: #f85149; }
+	#browser { display: none; flex-direction: column; gap: 8px; flex: 1; }
+	#addrRow { display: flex; gap: 8px; }
+	#addr { flex: 1; font-family: monospace; font-size: 13px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; }
+	#frameWrap { flex: 1; min-height: 46vh; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; background: #fff; }
+	#appFrame { width: 100%; height: 100%; border: 0; background: #fff; }
+	.hidden { display: none !important; }
+	@media (min-width: 640px) { main { padding: 20px 24px; } }
+</style>
+</head>
+<body>
+<header>
+	<h1>Nodine LAN preview</h1>
+	<p class="sub">Direct WebRTC connection to the dev server running in the browser on your computer. Same Wi-Fi only.</p>
+</header>
+<main>
+	<p id="status">Waiting for connection offer&hellip;</p>
+
+	<div class="card" id="pasteCard" style="display:none">
+		<h2>Paste the offer code</h2>
+		<p class="muted">Open the share panel in the IDE ("Web IDE: Share Dev Server on LAN (QR)"), copy the URL or the code after <b>#o=</b>, and paste it here.</p>
+		<textarea id="offerBox" placeholder="deflate+base64url offer code..." spellcheck="false"></textarea>
+		<button class="primary" id="connectBtn">Connect</button>
+	</div>
+
+	<div class="card" id="answerCard" style="display:none">
+		<h2>Answer code</h2>
+		<p class="muted">Copy this code back into the share panel on your computer (step 2) and press Connect there.</p>
+		<div class="codebox" id="answerCode"></div>
+		<button class="secondary" id="copyAnswerBtn">Copy answer code</button>
+	</div>
+
+	<div id="browser">
+		<div id="addrRow">
+			<input id="addr" value="/" spellcheck="false" autocapitalize="off">
+			<button class="primary" id="goBtn">Open</button>
+		</div>
+		<p class="muted" id="modeNote"></p>
+		<div id="frameWrap"><iframe id="appFrame" title="preview"></iframe></div>
+	</div>
+</main>
+
+<script>
+'use strict';
+// ---- helpers -------------------------------------------------------------
+var $ = function (id) { return document.getElementById(id); };
+function setStatus(msg, cls) { var el = $('status'); el.textContent = msg; el.className = cls || ''; }
+function b64uFromBytes(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function bytesFromB64u(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; var bin = atob(s); var out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+async function deflateCode(str) {
+	var bytes = new TextEncoder().encode(str);
+	var stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+	return b64uFromBytes(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+async function inflateCode(code) {
+	var stream = new Blob([bytesFromB64u(code)]).stream().pipeThrough(new DecompressionStream('deflate'));
+	return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+}
+function iceComplete(pc) {
+	return new Promise(function (resolve) {
+		if (pc.iceGatheringState === 'complete') return resolve();
+		var t = setTimeout(resolve, 2500);
+		pc.addEventListener('icegatheringstatechange', function () {
+			if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+		});
+	});
+}
+
+// ---- DataChannel transport (chunk-framed JSON) ---------------------------
+var dc = null;
+var chunks = Object.create(null);
+var waiters = Object.create(null); // id -> {resolve}
+var seq = 0;
+function dcSend(obj) {
+	var s = JSON.stringify(obj);
+	var MAX = 64000;
+	if (s.length <= MAX) { dc.send(s); return; }
+	var sid = 's' + (++seq);
+	var n = Math.ceil(s.length / MAX);
+	for (var i = 0; i < n; i++) dc.send(JSON.stringify({ t: 'chunk', sid: sid, i: i, n: n, d: s.slice(i * MAX, (i + 1) * MAX) }));
+}
+function dcFeed(frame) {
+	if (frame.t === 'chunk') {
+		var c = chunks[frame.sid] || (chunks[frame.sid] = { parts: [], n: frame.n });
+		c.parts[frame.i] = frame.d;
+		var got = 0; for (var k = 0; k < c.n; k++) if (c.parts[k] !== undefined) got++;
+		if (got === c.n) { var full = c.parts.join(''); delete chunks[frame.sid]; return JSON.parse(full); }
+		return null;
+	}
+	return frame;
+}
+function dcRequest(method, path, bodyBytes) {
+	return new Promise(function (resolve) {
+		if (!dc || dc.readyState !== 'open') { resolve({ status: 0, headers: {}, body: new Uint8Array(0), err: 'not connected' }); return; }
+		var id = 'g' + (++seq);
+		waiters[id] = { resolve: resolve };
+		dcSend({ t: 'req', id: id, method: method, path: path, headers: { accept: '*/*' }, bodyB64: bodyBytes ? b64uFromBytes(bodyBytes) : null });
+		setTimeout(function () {
+			if (waiters[id]) { delete waiters[id]; resolve({ status: 0, headers: {}, body: new Uint8Array(0), err: 'timeout (30s)' }); }
+		}, 30000);
+	});
+}
+// raw HTTP/1.1 response bytes -> {status, headers, body}
+function parseHttpResponse(bytes) {
+	var dec = new TextDecoder('utf-8', { fatal: false });
+	var headEnd = -1;
+	for (var i = 0; i < bytes.length - 3; i++) {
+		if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) { headEnd = i; break; }
+	}
+	if (headEnd < 0) return { status: 0, headers: {}, body: bytes };
+	var head = dec.decode(bytes.subarray(0, headEnd));
+	var body = bytes.subarray(headEnd + 4);
+	var lines = head.split('\r\n');
+	var status = parseInt((lines[0].split(' ')[1] || '0'), 10) || 0;
+	var headers = {};
+	for (var j = 1; j < lines.length; j++) {
+		var c = lines[j].indexOf(':');
+		if (c > 0) headers[lines[j].slice(0, c).trim().toLowerCase()] = lines[j].slice(c + 1).trim();
+	}
+	return { status: status, headers: headers, body: body };
+}
+// rewrite absolute-path URLs so they stay under the SW proxy prefix
+function rewriteHtml(text) {
+	var out = text.replace(/(src|href)(\s*=\s*)(["'])\/(?!\/)/g, '$1$2$3px/');
+	if (/<head[^>]*>/i.test(out)) {
+		out = out.replace(/<head([^>]*)>/i, '<head$1><base href="/share/px/">');
+	} else {
+		out = '<base href="/share/px/">' + out;
+	}
+	return out;
+}
+
+// ---- connection ----------------------------------------------------------
+var pc = null;
+async function connect(code) {
+	try {
+		var offerSdp = await inflateCode(code);
+		pc = new RTCPeerConnection({ iceServers: [] });
+		pc.ondatachannel = function (ev) {
+			dc = ev.channel;
+			dc.onopen = function () { onConnected(); };
+			dc.onmessage = function (e) {
+				var msg; try { msg = dcFeed(JSON.parse(e.data)); } catch (err) { return; }
+				if (!msg || msg.t !== 'res') return;
+				var w = waiters[msg.id];
+				if (!w) return;
+				delete waiters[msg.id];
+				if (msg.err) { w.resolve({ status: 0, headers: {}, body: new Uint8Array(0), err: msg.err }); return; }
+				w.resolve(parseHttpResponse(bytesFromB64u(msg.b64)));
+			};
+		};
+		await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+		var answer = await pc.createAnswer();
+		await pc.setLocalDescription(answer);
+		await iceComplete(pc);
+		var answerCode = await deflateCode(pc.localDescription.sdp);
+		$('answerCode').textContent = answerCode;
+		$('answerCard').style.display = '';
+		setStatus('Answer ready \u2014 copy it to the computer, then this page switches to the app automatically.', '');
+	} catch (e) {
+		setStatus('Connection failed: ' + (e && e.message || e), 'err');
+	}
+}
+
+// ---- connected: SW proxy first, srcdoc fallback ---------------------------
+async function onConnected() {
+	setStatus('Connected.', 'ok');
+	$('pasteCard').style.display = 'none';
+	$('answerCard').style.display = 'none';
+	$('browser').style.display = 'flex';
+	if ('serviceWorker' in navigator && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+		try {
+			await navigator.serviceWorker.register('sw.js', { scope: './' });
+			if (!navigator.serviceWorker.controller) {
+				await new Promise(function (r) {
+					navigator.serviceWorker.addEventListener('controllerchange', r, { once: true });
+					setTimeout(r, 5000);
+				});
+			}
+			navigator.serviceWorker.addEventListener('message', function (ev) {
+				var m = ev.data || {};
+				if (m.t !== 'swfetch') return;
+				dcRequest(m.method, m.path, null).then(function (r) {
+					var body = r.body;
+					var ctype = r.headers['content-type'] || '';
+					if (ctype.indexOf('text/html') >= 0 && r.status === 200) {
+						body = new TextEncoder().encode(rewriteHtml(new TextDecoder().decode(r.body)));
+					}
+					(ev.source || navigator.serviceWorker.controller).postMessage({
+						t: 'swres', reqId: m.reqId,
+						status: r.status || 502,
+						headers: Object.assign({ 'content-type': ctype || 'text/plain' }, r.headers),
+						body: body.buffer ? body : new Uint8Array(body),
+					});
+				});
+			});
+			$('modeNote').textContent = 'Proxy mode: service worker active \u2014 full apps with subresources work.';
+			navigate('/');
+			return;
+		} catch (e) { /* fall through to srcdoc mode */ }
+	}
+	$('modeNote').textContent = 'Simple mode (no service worker on plain http): single-page previews only.';
+	navigateSimple('/');
+}
+
+function showResponse(r) {
+	var frame = $('appFrame');
+	var ctype = r.headers['content-type'] || '';
+	if (r.err || r.status === 0) {
+		frame.srcdoc = '<pre style="font:13px monospace;padding:12px">request failed: ' + (r.err || 'HTTP ' + r.status) + '</pre>';
+	} else if (ctype.indexOf('text/html') >= 0) {
+		frame.srcdoc = rewriteHtml(new TextDecoder().decode(r.body));
+	} else {
+		var text = /^(text|application\/(json|javascript|x-sh))/i.test(ctype) || !ctype ? new TextDecoder().decode(r.body) : '(' + r.body.length + ' bytes of ' + (ctype || 'binary') + ')';
+		frame.srcdoc = '<pre style="font:12px monospace;padding:12px;white-space:pre-wrap">HTTP ' + r.status + '\n' + text.replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; }) + '</pre>';
+	}
+}
+function navigate(path) {
+	$('addr').value = path;
+	$('appFrame').removeAttribute('srcdoc');
+	$('appFrame').src = '/share/px' + (path.charAt(0) === '/' ? path : '/' + path);
+}
+async function navigateSimple(path) {
+	$('addr').value = path;
+	var r = await dcRequest('GET', path, null);
+	showResponse(r);
+}
+// e2e diagnostics hook
+window.__lan = {
+	dcState: function () { return dc ? dc.readyState : 'none'; },
+	probe: function (path) { return dcRequest('GET', path || '/', null).then(function (r) { return { status: r.status, err: r.err, body: new TextDecoder().decode(r.body).slice(0, 120) }; }); },
+};
+$('goBtn').addEventListener('click', function () {
+	var p = $('addr').value || '/';
+	if ($('modeNote').textContent.indexOf('Proxy mode') === 0) navigate(p); else navigateSimple(p);
+});
+$('addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('goBtn').click(); });
+$('copyAnswerBtn').addEventListener('click', function () {
+	navigator.clipboard.writeText($('answerCode').textContent).then(function () {
+		$('copyAnswerBtn').textContent = 'Copied!';
+		setTimeout(function () { $('copyAnswerBtn').textContent = 'Copy answer code'; }, 1500);
+	});
+});
+
+// ---- boot: offer from URL hash, or paste ---------------------------------
+(function boot() {
+	var m = location.hash.match(/#o=([A-Za-z0-9_\-]+)/);
+	if (m) {
+		setStatus('Offer received \u2014 answering\u2026');
+		connect(m[1]);
+	} else {
+		setStatus('No offer in the URL. Paste one below.', '');
+		$('pasteCard').style.display = '';
+		$('connectBtn').addEventListener('click', function () {
+			var raw = $('offerBox').value.trim();
+			if (!raw) return;
+			var code = raw.indexOf('#o=') >= 0 ? (raw.match(/#o=([A-Za-z0-9_\-]+)/) || [])[1] : raw;
+			if (!code) return;
+			connect(code);
+		});
+	}
+})();
+</script>
+</body>
+</html>

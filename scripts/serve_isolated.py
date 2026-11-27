@@ -9,6 +9,7 @@ This mirrors what a production host must send (Cloudflare Pages: use a
 
 Usage: python3 serve_isolated.py [port] [root]
 """
+import os
 import sys
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -33,6 +34,28 @@ class IsolatedHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write('%s - %s\n' % (self.address_string(), fmt % args))
+
+    def do_GET(self):
+        # VSCODE_WEBVIEW_ORIGIN: the workbench bundle's webview endpoint points
+        # at our own origin (self-hosted webview bootstrap under
+        # /out/vs/workbench/contrib/webview/browser/pre/) — rewrite the
+        # placeholder per request so any host (localhost, LAN IP) works.
+        path = self.translate_path(self.path)
+        if path.endswith(('.js', '.html')) and os.path.isfile(path):
+            with open(path, 'rb') as f:
+                body = f.read()
+            if b'VSCODE_WEBVIEW_ORIGIN' in body:
+                host = self.headers.get('Host') or f'127.0.0.1:{PORT}'
+                body = body.replace(b'VSCODE_WEBVIEW_ORIGIN', ('http://' + host).encode())
+                self.send_response(200)
+                ctype = 'application/javascript' if path.endswith('.js') else 'text/html; charset=utf-8'
+                self.send_header('Content-Type', ctype)
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(body)
+                return
+        super().do_GET()
 
 
 if __name__ == '__main__':

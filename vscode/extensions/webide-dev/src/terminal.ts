@@ -116,6 +116,7 @@ class NodineTerminal implements vscode.Pseudoterminal {
 		this.write('\x1b[90mstarting dev environment…\x1b[0m\r\n');
 		try {
 			this.container = await bootContainer(this.runtimeUrl);
+			console.error('[webide-dev] terminal using container', (this.container as any).__bootTag);
 		} catch (err) {
 			console.error('[webide-dev] runtime boot failed:', err);
 			this.write('\x1b[31mfailed to start the dev environment (the host must send cross-origin isolation headers).\x1b[0m\r\n');

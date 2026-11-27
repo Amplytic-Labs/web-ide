@@ -1609,6 +1609,20 @@ export class Supervisor {
   initPreviewSW(sid, swPort) {
     this.previewSid = sid;
     this.previewSW = swPort;
+    // 0.5.2 (LAN-SHARE): workers spawned BEFORE the bridge attached never got
+    // a per-worker preview channel (the spawn-time initTransfer only fires
+    // when previewSW is already set), so their http.Server.listen() calls
+    // dark-listened. Hand every live worker its channel NOW — mirroring the
+    // spawn-time pair — so running dev servers re-register on the bridge
+    // instead of requiring a restart of the user's server.
+    for (const proc of this.procs.values()) {
+      if (!proc.port || proc.exited) continue;
+      try {
+        const swc = new MessageChannel();
+        this.previewSW.postMessage({ type: 'preview-worker-chan', sid }, [swc.port2]);
+        proc.port.postMessage({ type: 'preview-sw-port' }, [swc.port1]);
+      } catch {}
+    }
     // M1.5: the SW talks back on the SAME bridge port — preview-error events
     // from injected capture hooks (window.onerror / unhandledrejection /
     // console.error inside preview documents). Keep the per-port channel

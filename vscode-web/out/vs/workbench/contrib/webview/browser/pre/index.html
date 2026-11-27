@@ -5,7 +5,7 @@
 	<meta charset="UTF-8">
 
 	<meta http-equiv="Content-Security-Policy"
-		content="default-src 'none'; script-src 'sha256-mJlW7V1HtPghR7DIVKkjtQB+P4WPEn1mv458ONAbG60=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
+		content="default-src 'none'; script-src 'sha256-6V3DjRvv1xRuR9uRIqDhaNYY60SktaCAfJuadOA48+U=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
 
 	<!-- Disable pinch zooming -->
 	<meta name="viewport"
@@ -374,6 +374,16 @@
 
 				if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {
 					// validation succeeded!
+					return start(parentOrigin);
+				}
+
+				// nodine (self-hosted webview endpoint): when this bootstrap is served
+				// from the SAME origin as the workbench (webviewContentExternalBaseUrlTemplate
+				// pointed at <origin>/out/vs/workbench/contrib/webview/browser/pre), the
+				// hash-subdomain check cannot hold — the hostname is the workbench host.
+				// parentOrigin still pins exactly which parent may receive webview-ready,
+				// so a literal same-origin match is equivalent security here.
+				if (location.origin === parentOrigin) {
 					return start(parentOrigin);
 				}
 
