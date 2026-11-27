@@ -1,4 +1,4 @@
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/errors/index.js
+// vscode/node_modules/@amplytic/nodine/dist/errors/index.js
 var NodineError = class extends Error {
   code;
   constructor(message, code) {
@@ -59,24 +59,25 @@ var SpawnError = class extends NodineError {
   }
 };
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/environment.js
-var inBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+// vscode/node_modules/@amplytic/nodine/dist/environment.js
+var inWindow = typeof window !== "undefined" && typeof document !== "undefined";
+var inWorker = !inWindow && typeof self !== "undefined" && typeof WorkerGlobalScope !== "undefined" && typeof importScripts === "function";
+var g = globalThis;
 function checkEnvironment() {
-  const inWorkerGlobal = typeof window === "undefined" && typeof self !== "undefined";
   const checks = [];
   const hasWindow = typeof window !== "undefined";
   const hasDocument = typeof document !== "undefined";
   checks.push({
     id: "browser-context",
-    ok: (hasWindow && hasDocument) || inWorkerGlobal,
-    message: "Nodine boots inside a browser page (window/document are unavailable \u2014 are you running in Node?)"
+    ok: hasWindow && hasDocument || inWorker,
+    message: "Nodine boots inside a browser page or Worker (window/document are unavailable \u2014 are you running in Node?)"
   });
-  if (!inBrowser)
+  if (!inWindow && !inWorker)
     return checks;
   checks.push({
     id: "cross-origin-isolated",
-    ok: (typeof window !== "undefined" ? window.crossOriginIsolated : self.crossOriginIsolated) === true,
-    message: 'the page is not cross-origin isolated \u2014 serve COOP "same-origin" and COEP "require-corp" or "credentialless" headers from your application origin'
+    ok: g.crossOriginIsolated === true,
+    message: 'the embedding context is not cross-origin isolated \u2014 serve COOP "same-origin" and COEP "require-corp" or "credentialless" headers from your application origin'
   });
   checks.push({
     id: "shared-array-buffer",
@@ -85,8 +86,10 @@ function checkEnvironment() {
   });
   checks.push({
     id: "service-workers",
-    ok: inWorkerGlobal || "serviceWorker" in navigator,
-    message: "Service Workers are unavailable (requires a secure context: https or localhost)"
+    // Worker contexts have no navigator.serviceWorker; only previewUrl's
+    // service-worker proxy needs it, and it degrades gracefully there.
+    ok: inWorker || "serviceWorker" in navigator,
+    message: "Service Workers are unavailable (requires a page context and a secure context: https or localhost; previewUrl is unavailable in Workers)"
   });
   checks.push({
     id: "wasm",
@@ -155,10 +158,10 @@ function environmentFailures() {
   return checkEnvironment().filter((c) => !c.ok);
 }
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/version.js
+// vscode/node_modules/@amplytic/nodine/dist/version.js
 var SDK_VERSION = "0.4.0";
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/runtime-adapter.js
+// vscode/node_modules/@amplytic/nodine/dist/runtime-adapter.js
 var HeadlessTermSink = class {
   buffer = "";
   subscribers = /* @__PURE__ */ new Set();
@@ -239,7 +242,7 @@ function assertRuntimeSurface(sup) {
   }
 }
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/types/filesystem.js
+// vscode/node_modules/@amplytic/nodine/dist/types/filesystem.js
 var Dirent = class {
   name;
   _kind;
@@ -261,7 +264,7 @@ var Dirent = class {
   }
 };
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/fs-adapter.js
+// vscode/node_modules/@amplytic/nodine/dist/fs-adapter.js
 var dec = new TextDecoder();
 function decodeBytes(u8, encoding) {
   switch (encoding) {
@@ -450,7 +453,7 @@ async function rmRecursive(abs, sup) {
     throw new FileSystemError(errnoMessage(rc, abs, "rmdir"));
 }
 
-// ../vscode/node_modules/.pnpm/@amplytic+nodine@0.4.0/node_modules/@amplytic/nodine/dist/container.js
+// vscode/node_modules/@amplytic/nodine/dist/container.js
 var DEFAULT_RUNTIME_URL = "/nodine/supervisor.mjs";
 var Container = class _Container {
   supervisor;
@@ -498,7 +501,23 @@ var Container = class _Container {
         'coep: "none" \u2014 Nodine requires cross-origin isolation (SharedArrayBuffer + WASM threads); there is no non-isolated fallback mode'
       ]);
     }
-    const runtimeUrl = options.runtimeUrl == null ? DEFAULT_RUNTIME_URL : String(options.runtimeUrl);
+    const runtimeUrlRaw = options.runtimeUrl == null ? DEFAULT_RUNTIME_URL : String(options.runtimeUrl);
+    const resolveRuntimeUrl = () => {
+      try {
+        return new URL(runtimeUrlRaw);
+      } catch {
+      }
+      const base = typeof document !== "undefined" ? document.baseURI : typeof self !== "undefined" && self.location ? self.location.href : void 0;
+      if (!base) {
+        throw new BootFailedError(`runtimeUrl "${runtimeUrlRaw}" is relative and this context (a blob: Worker) has no base URL \u2014 pass an absolute URL (e.g. https://host/nodine/supervisor.mjs)`);
+      }
+      try {
+        return new URL(runtimeUrlRaw, base);
+      } catch {
+        throw new BootFailedError(`runtimeUrl "${runtimeUrlRaw}" cannot be resolved against ${base} \u2014 pass an absolute URL`);
+      }
+    };
+    const runtimeUrl = resolveRuntimeUrl();
     const term = new HeadlessTermSink();
     const statusEls = {
       kernel: { textContent: "" },
@@ -537,7 +556,7 @@ var Container = class _Container {
       await supervisor.mkdirP(workdirPath);
     } catch {
     }
-    const container = new _Container(supervisor, term, workdirPath, new URL(runtimeUrl, (typeof document !== "undefined" ? document.baseURI : self.location.origin)));
+    const container = new _Container(supervisor, term, workdirPath, runtimeUrl);
     container.__sup = supervisor;
     if (options.enablePreview !== false) {
       await container.initPreviewBridge(options.forwardPreviewErrors);
