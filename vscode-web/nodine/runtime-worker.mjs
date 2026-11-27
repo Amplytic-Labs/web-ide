@@ -3473,6 +3473,25 @@ defBinding('fs', () => {
     return fd;
   }
   function forgetFd(fd) { fdPathRegistry.delete(fd); }
+
+  // R-FSYNC: memory-only VFS has no durable state to flush — fsync/fdatasync
+  // are no-op successes for any fd the registry knows (tmpfs behaves the
+  // same); unknown fds fail with EBADF so closed/invalid descriptors don't
+  // silently pass. No kernel op exists, hence the registry consultation.
+  function fsyncNoOp(fd, req, op) {
+    const known = fdPathRegistry.has(fd) || fd === 0 || fd === 1 || fd === 2;
+    const fail = () => {
+      const e = makeErr(-9, op, null); e.code = 'EBADF'; // UV_EBADF
+      return e;
+    };
+    if (req === kUsePromises) return known ? Promise.resolve() : Promise.reject(fail());
+    if (isReq(req)) {
+      const err = known ? null : fail();
+      completeAsync(() => req.oncomplete.call(req, err));
+      return;
+    }
+    if (!known) throw fail();
+  }
   const fs_constants_O_DIRECTORY = 0x10000; // Linux O_DIRECTORY (node fs.constants.O_DIRECTORY)
   function repairFstatSlots(arr, fd) {
     try {
@@ -4760,13 +4779,72 @@ defBinding('fs', () => {
     // — the notImpl entries that used to sit here SHADOWED them (later keys
     // win in object literals); caught live by npx bin-linking (symlink) and
     // libnpmexec's with-lock touchLock (utimes → ECOMPROMISED).
-    fsync(fd, req) { notImpl('fsync'); },
-    fdatasync(fd, req) { notImpl('fdatasync'); },
+    // R-FSYNC FIX: the VFS is memory-only, so there is nothing to flush to a
+    // disk — fsync/fdatasync succeed as no-ops (tmpfs returns 0 the same way).
+    // The old honest-ENOSYS broke every write-file-atomic 8.x user: its
+    // writeFileSync/writeFile await fs.fsync unguarded, so bin-links'
+    // dos2Unix (CRLF hashbang fix) and any dep pulling the module rejected
+    // with ENOSYS after the file was already written. Verified live: npm
+    // 12's lockfile writes don't use wfa (fsp.writeFile via
+    // @npmcli/package-json), but the module IS bundled and reachable.
+    // Unknown fd still fails honestly with EBADF (there is no kernel FSYNC
+    // op to validate the fd, so consult the fd→path registry).
+    fsync(fd, req) { return fsyncNoOp(fd, req, 'fsync'); },
+    fdatasync(fd, req) { return fsyncNoOp(fd, req, 'fdatasync'); },
     chown(path, uid, gid, req) { notImpl('chown'); },
     fchown(fd, uid, gid, req) { notImpl('fchown'); },
     lchown(path, uid, gid, req) { notImpl('lchown'); },
     lutimes(path, atime, mtime, req) { notImpl('lutimes'); },
-    realpath(path, encoding, req) { notImpl('realpath'); }, // realpathSync uses the JS walk
+    // R-REALPATH FIX: fs.promises.realpath and realpath(.native) reach the
+    // binding, while realpathSync + callback realpath use the pure-JS walk in
+    // lib/fs.js — the notImpl here made every promise/native realpath reject
+    // with ENOSYS (pnpm 9 dies at startup on exactly that: verified live
+    // 2026-11-27). Emulate with the kernel ops that DO exist (LSTAT +
+    // READLINK): follow symlinks up to 40 hops (uv__fs__realpath semantics),
+    // detect loops via a seen-set, resolve and normalize targets lexically (POSIX rules, join with
+    // separators — NOT the host-mirror flattener), complete with the resolved path.
+    realpath(path, encoding, req) {
+      // POSIX lexical normalize WITH separators (hostCwdResolve is the
+      // host-mirror flattener — join('') — and must NOT be used here).
+      const rpNorm = (s) => {
+        const out = [];
+        for (const seg of String(s).split('/')) {
+          if (seg === '' || seg === '.') continue;
+          if (seg === '..') { out.pop(); continue; }
+          out.push(seg);
+        }
+        return '/' + out.join('/');
+      };
+      const run = () => {
+        let p = String(path);
+        if (!p.startsWith('/')) p = rpNorm((hostCwd || '/') + '/' + p);
+        const seen = new Set();
+        for (;;) {
+          if (seen.has(p)) { const e = makeErr(-40, 'realpath', p); e.code = 'ELOOP'; throw e; }
+          seen.add(p);
+          const st = syncOp(OP.LSTAT, 0n, 0n, 0n, enc.encode(p));
+          if (st.status !== 0) uvThrow(st.status, 'realpath', p);
+          const mode = Number(statArray(st.payload, false)[1]);
+          if ((mode & 0o170000) !== 0o120000) return p; // not a symlink — done
+          if (seen.size > 40) { const e = makeErr(-40, 'realpath', p); e.code = 'ELOOP'; throw e; }
+          const rl = syncOp(OP.READLINK, 1024n, 0n, 0n, enc.encode(p));
+          if (rl.status !== 0) uvThrow(rl.status, 'realpath', p);
+          const target = decodeUvPath(rl.payload, encoding);
+          p = rpNorm(target.startsWith('/') ? target : p.replace(/[^/]*$/, '') + target);
+        }
+      };
+      if (req === kUsePromises) {
+        try { return Promise.resolve(run()); } catch (e) { return Promise.reject(e); }
+      }
+      if (isReq(req)) {
+        completeAsync(() => {
+          try { req.oncomplete.call(req, null, run()); }
+          catch (e) { req.oncomplete.call(req, e); }
+        });
+        return;
+      }
+      return run();
+    }, // was: notImpl — realpathSync/callback realpath never reached here (JS walk)
     statfs(path, bigint, req) { notImpl('statfs'); },
     bufferCopy(src, srcStart, srcEnd, dst, dstStart) { notImpl('bufferCopy'); },
     cpSyncCheckPaths() { notImpl('cpSyncCheckPaths'); },

@@ -187,8 +187,8 @@ importers:
   .:
     dependencies:
       '@amplytic/nodine':
-        specifier: file:/home/z/my-project/nodine/amplytic-nodine-0.4.1.tgz
-        version: file:../nodine/amplytic-nodine-0.4.1.tgz
+        specifier: ^0.5.0
+        version: 0.5.0
       '@anthropic-ai/sdk':
         specifier: ^0.82.0
         version: 0.82.0(zod@4.4.3)
@@ -2333,9 +2333,9 @@ packages:
   '@acemir/cssom@0.9.31':
     resolution: {integrity: sha512-ZnR3GSaH+/vJ0YlHau21FjfLYjMpYVIzTD8M8vIEQvIGxeOXyXdzCI140rrCY862p/C/BbzWsjc1dgnM9mkoTA==}
 
-  '@amplytic/nodine@file:../nodine/amplytic-nodine-0.4.1.tgz':
-    resolution: {integrity: sha512-+sozn0Wo/Q5vnkrHnUGQp/afzZ0nw0hnGdLVNFQY71DFxdvi8po8QET5X/wIjUmrLrhsAn+VKqHbVg8YyvJtRw==, tarball: file:../nodine/amplytic-nodine-0.4.1.tgz}
-    version: 0.4.1
+  '@amplytic/nodine@0.5.0':
+    resolution: {integrity: sha512-/lyb/JzTQBAih9+5OtGpGoS4fUz2ZNyXvUA1P/vhIfXiW+s6P5KGRSHWVN36Y/wdztutd7er7hj3nyoQbUL/sg==}
+    version: 0.5.0
     engines: {node: '>=18'}
     hasBin: true
 
@@ -12259,7 +12259,7 @@ snapshots:
 
   '@acemir/cssom@0.9.31': {}
 
-  '@amplytic/nodine@file:../nodine/amplytic-nodine-0.4.1.tgz': {}
+  '@amplytic/nodine@0.5.0': {}
 
   '@antfu/install-pkg@1.1.0':
     dependencies:
