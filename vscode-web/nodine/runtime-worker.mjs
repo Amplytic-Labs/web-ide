@@ -145,6 +145,11 @@ let PREVIEW_SW_PORT_READY = null; // resolved once the port is installed
 // B1-PREVIEW: per-port bridge records — {port, chan (worker side of the
 // per-port MessageChannel), server, conns: Map(id -> sock)}. listenViaSW
 // closes over its own record; NO shared mutable "current port" state.
+// LAN-SHARE (module scope): count of DARK-listened servers (bridgeHttpFactory
+// maintains it — darkServers itself lives in the factory closure). The quit
+// decision needs it: a process whose only handle is a dark-listened server
+// must stay alive exactly like a bridged one (see the allQuiet condition).
+let darkListenCount = 0;
 const previewPorts = new Map();
 // MODULE SCOPE: the init message can arrive (and be installed) BEFORE the
 // http factory runs — installPreviewSWPort must exist from module top. The
@@ -7102,6 +7107,7 @@ function bridgeHttpFactory(isHttps) {
             return;
           }
           darkServers.set(port, srv); // uniform close() bookkeeping
+          darkListenCount = darkServers.size; // LAN-SHARE: sync liveness counter
           srv.port = port;
           srv.listening = true;
           platformMessagePost({ type: 'port-open', port }); // supervisor event
@@ -7351,6 +7357,7 @@ function bridgeHttpFactory(isHttps) {
         this.__dark = true;
         this.port = port;
         this.listening = true;
+        darkListenCount = darkServers.size; // LAN-SHARE: liveness for waitForQuit
         platformMessagePost({ type: 'port-open', port }); // supervisor event
         setImmediate(() => this.emit('listening'));
         return this;
@@ -8323,7 +8330,16 @@ async function waitForQuit() {
     // JS otherwise silent). Without this the process is quit-quiet-killed
     // ~600 ms after wasm instantiation begins.
     const liveWasmWorkers = pnpm_wasmNodeSupport.liveWorkers();
-    const allQuiet = !immediateCount && !hasTimer && !hasTicks && !pendingFs && !pendingHttpFetches && !liveChildren && !pendingSpawnReplies && !stdinWaiters && stdinRetryCount === 0 && dynImportInFlight === 0 && previewPorts.size === 0 && liveWasmWorkers === 0
+    // LAN-SHARE FIX (the dark-listen twin of M1.3): darkServers are ACTIVE
+    // HANDLES too — a process whose only activity is a DARK-listened server
+    // (no SW bridge attached at listen() time, e.g. Share-on-LAN not yet
+    // invoked) saw an all-zero snapshot and exited code 0, the supervisor
+    // reaped it, previewCloseAllForProc wiped the port registry, and the
+    // share command found zero ports (verified live: EXIT pid=3 code=0
+    // argv=["node","preview-demo.js"] previewPortsBefore=1, then shareLan
+    // bridge ok, ports: []). previewPorts.size already counts SW-bridged
+    // listens (M1.3); darkServers must count the same way.
+    const allQuiet = !immediateCount && !hasTimer && !hasTicks && !pendingFs && !pendingHttpFetches && !liveChildren && !pendingSpawnReplies && !stdinWaiters && stdinRetryCount === 0 && dynImportInFlight === 0 && previewPorts.size === 0 && darkListenCount === 0 && liveWasmWorkers === 0
       // P2-006-008-3: KEEP-ALIVE-SOCKET STAND-IN — hold the loop open for 2 s
       // after the last HTTP activity. Real Node never sees loop-death during
       // an npm install (agent keep-alive sockets are active handles); our
