@@ -9,6 +9,20 @@ import { importFromGithub } from './githubImport';
 import { uploadFolder } from './folderUpload';
 import { shareOnLan } from './lanShare';
 
+/** Read-only list of live preview ports without attaching the share bridge
+ *  (ensurePreviewBridge claims the supervisor's free preview-SW slot, a side
+ *  effect we don't want just to draw a label). */
+function peekPorts(): number[] {
+	const container = getContainer();
+	const sup: any = container ? (container as any).__sup : null;
+	const reg = sup?.previewPorts;
+	const out: number[] = [];
+	if (reg && typeof reg.forEach === 'function') {
+		reg.forEach((_v: unknown, port: number) => { out.push(port); });
+	}
+	return out.sort((a, b) => a - b);
+}
+
 /** A pseudoterminal that runs one command (`node <file>`) and exits. */
 class RunOnceTerminal implements vscode.Pseudoterminal {
 	private writeEmitter = new vscode.EventEmitter<string>();
@@ -382,10 +396,38 @@ export async function activate(_context: vscode.ExtensionContext): Promise<void>
 		}
 	});
 
-	_context.subscriptions.push(
-		vscode.commands.registerCommand('webide-dev.createTerminal', () => {
-			createDevTerminal(_context);
-		}),
+		// Always-visible entry point for LAN share: the command palette is the
+		// ONLY way to reach webide-dev.shareLan otherwise (no menu contributes
+		// it) — invisible unless you already know it exists. A status-bar item
+		// is visible on every workbench, zero discovery cost.
+		const shareItem = vscode.window.createStatusBarItem(
+			vscode.StatusBarAlignment.Right, 100,
+		);
+		shareItem.command = 'webide-dev.shareLan';
+		shareItem.text = '$(radio-tower) Share on LAN';
+		shareItem.tooltip = 'Share a dev server running in this IDE on your local network (phone / second tab preview, WebRTC, nothing leaves your machine)';
+		shareItem.show();
+		_context.subscriptions.push(shareItem);
+
+		// Reflects live ports in the status bar: when a dev server is running
+		// the button tells you WHICH port it would share, not just that the
+		// feature exists.
+		const refreshShareItem = (): void => {
+			try {
+				const ports = peekPorts().join(', ');
+				shareItem.text = ports ? `$(radio-tower) Share :${ports} on LAN` : '$(radio-tower) Share on LAN';
+			} catch { /* runtime not up yet — keep the default label */ }
+		};
+		// Ports come and go as dev servers start/stop; the supervisor exposes
+		// no push event to the extension host, so refresh on a cheap poll.
+		const sharePoll = setInterval(refreshShareItem, 2000);
+		_context.subscriptions.push({ dispose: () => clearInterval(sharePoll) });
+		refreshShareItem();
+
+		_context.subscriptions.push(
+			vscode.commands.registerCommand('webide-dev.createTerminal', () => {
+				createDevTerminal(_context);
+			}),
 
 		// Terminal-profile entry point: invoked by the workbench whenever a
 		// DEFAULT terminal is created (the + button, Ctrl+`, menu) because

@@ -60,7 +60,8 @@
       {
         "command": "webide-dev.shareLan",
         "title": "Share Dev Server on LAN (QR)...",
-        "category": "Web IDE"
+        "category": "Web IDE",
+        "icon": "$(radio-tower)"
       }
     ],
     "menus": {
@@ -68,6 +69,18 @@
         {
           "command": "webide-dev.runFile",
           "group": "webide@1"
+        }
+      ],
+      "terminal/menu": [
+        {
+          "command": "webide-dev.shareLan",
+          "group": "webide@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "webide-dev.shareLan",
+          "group": "webide@2"
         }
       ]
     },
