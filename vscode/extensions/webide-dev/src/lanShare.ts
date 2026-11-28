@@ -241,6 +241,27 @@ async function waitForLivePort(b: BridgeHandle, port: number, ms: number): Promi
  */
 export async function shareOnLan(): Promise<void> {
 	console.error('[lanShare] command invoked');
+
+	// Pre-flight consent. The share itself is pure WebRTC + same-origin
+	// fetches — it does NOT make local-network HTTP requests, so Chrome's
+	// local-network permission prompt should never fire for it. But the
+	// phone preview flow is the one place a future change could start
+	// hitting private-range URLs (a fetch to the dev server's LAN IP
+	// instead of the DataChannel relay). Get explicit, informed consent
+	// BEFORE anything could trigger a browser permission prompt: say what
+	// access is for, what breaks without it, and only proceed on Approve.
+	const consent = await vscode.window.showInformationMessage(
+		'Share a dev server on your local network?',
+		{
+			modal: true,
+			detail: 'Why: this opens a WebRTC connection between your phone and this browser tab so the phone can preview the dev server running in the IDE.\n\n'
+				+ 'What this needs: devices on the same Wi-Fi can connect to this tab. Nothing is installed, no cloud service is involved, and your files stay on this machine.\n\n'
+				+ 'Without it: the preview on your phone will not connect. The IDE itself keeps working.',
+		},
+		'Approve',
+	);
+	if (consent !== 'Approve') { return; }
+
 	let b: BridgeHandle;
 	try {
 		b = ensurePreviewBridge();
