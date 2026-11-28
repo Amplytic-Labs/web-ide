@@ -31,13 +31,13 @@
 		<!-- Startup fallback: shown only if the scripts below never run, e.g. because a proxy,
 			extension or content filter blocked or rewrote them. Styles are inlined and hardcoded
 			because no theme or workbench CSS has loaded at that point.
-			nodine: doubles as the branded loading screen — a spinner shows while the
-			workbench bundle downloads on slow first load (it is multi-MB static),
-			and the "failed to load" copy only appears after 10s without progress. -->
+			nodine: doubles as the branded loading screen — the loader is visible IMMEDIATELY
+			(0s) while the workbench bundle downloads on slow first load (it is multi-MB static).
+			The "failed to load" copy only appears on a REAL failure: the workbench entry
+			script errored, or 30s passed with no load progress at all. A slow-but-alive
+			download keeps showing the loader (never scares the user off). -->
 		<style>
 			#vscode-startup-fallback {
-				visibility: hidden;
-				animation: vscode-startup-fallback-reveal 0s linear 10s forwards;
 				position: fixed;
 				inset: 0;
 				display: flex;
@@ -51,10 +51,19 @@
 				font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 				color: #3b3b3b;
 				background-color: #f8f8f8;
+				z-index: 9999;
 			}
 
-			@keyframes vscode-startup-fallback-reveal {
-				to { visibility: visible; }
+			#vscode-startup-fallback .nodine-logo {
+				width: 64px;
+				height: 64px;
+				margin-bottom: 16px;
+				animation: nodine-pulse 1.6s ease-in-out infinite;
+			}
+
+			@keyframes nodine-pulse {
+				0%, 100% { opacity: 1; }
+				50% { opacity: 0.45; }
 			}
 
 			#vscode-startup-fallback h1 {
@@ -92,6 +101,38 @@
 				75%, 100% { content: '...'; }
 			}
 
+			#vscode-startup-fallback .nodine-progress {
+				width: min(320px, 80vw);
+				height: 3px;
+				margin: 14px auto 0;
+				border-radius: 2px;
+				background: #d4d4d4;
+				overflow: hidden;
+				position: relative;
+			}
+
+			#vscode-startup-fallback .nodine-progress-bar {
+				position: absolute;
+				top: 0;
+				left: 0;
+				height: 100%;
+				width: 30%;
+				background: #61e925;
+				border-radius: 2px;
+				animation: nodine-slide 1.4s ease-in-out infinite;
+			}
+
+			@keyframes nodine-slide {
+				0% { left: -30%; }
+				100% { left: 100%; }
+			}
+
+			#vscode-startup-fallback .nodine-sub {
+				margin-top: 10px;
+				font-size: 12px;
+				color: #6b6b6b;
+			}
+
 			#vscode-startup-fallback .nodine-error {
 				display: none;
 			}
@@ -100,14 +141,43 @@
 				display: block;
 			}
 
-			#vscode-startup-fallback.reveal-error .nodine-loading {
+			#vscode-startup-fallback.reveal-error .nodine-loading,
+			#vscode-startup-fallback.reveal-error .nodine-logo,
+			#vscode-startup-fallback.reveal-error .nodine-progress,
+			#vscode-startup-fallback.reveal-error .nodine-sub {
 				display: none;
+			}
+
+			#vscode-startup-fallback .nodine-retry {
+				margin-top: 18px;
+				display: none;
+			}
+
+			#vscode-startup-fallback.reveal-error .nodine-retry {
+				display: inline-block;
+				padding: 8px 22px;
+				border-radius: 4px;
+				border: 1px solid #61e925;
+				color: #61e925;
+				background: transparent;
+				font-size: 13px;
+				font-weight: 600;
+				text-decoration: none;
+				cursor: pointer;
 			}
 
 			@media (prefers-color-scheme: dark) {
 				#vscode-startup-fallback {
 					color: #cccccc;
 					background-color: #1f1f1f;
+				}
+
+				#vscode-startup-fallback .nodine-progress {
+					background: #3c3c3c;
+				}
+
+				#vscode-startup-fallback .nodine-sub {
+					color: #9d9d9d;
 				}
 			}
 		</style>
@@ -116,17 +186,58 @@
 
 	<body aria-label="">
 		<div id="vscode-startup-fallback">
+			<img class="nodine-logo" src="{{WORKBENCH_WEB_BASE_URL}}/Nodine-logo.svg" alt="Nodine" onerror="this.style.display='none'" />
 			<h1 class="nodine-loading">Loading Nodine Web IDE</h1>
-			<p class="nodine-loading">Real VS Code is downloading to your browser (a few MB, cached after the first load).</p>
+			<p class="nodine-loading">Real VS Code is downloading to your browser (~10&nbsp;MB compressed on first load, cached afterwards).</p>
+			<div class="nodine-progress"><div class="nodine-progress-bar" id="nodine-progress-bar"></div></div>
+			<p class="nodine-sub" id="nodine-progress-sub">Preparing…</p>
 			<h1 class="nodine-error">The editor failed to load</h1>
 			<p class="nodine-error">A proxy, browser extension or content filter may be blocking or modifying this page's scripts. Check the browser developer tools console for Content Security Policy errors.</p>
+			<a class="nodine-retry" href="javascript:location.reload()">Reload the IDE</a>
 			<script nonce="{{WORKBENCH_SCRIPT_NONCE}}">
 				// The workbench removes #vscode-startup-fallback as soon as it starts.
-				// If we are still here after 10s (the CSS reveal), swap loading copy → error copy.
-				setTimeout(() => {
-					const el = document.getElementById('vscode-startup-fallback');
-					if (el) { el.classList.add('reveal-error'); }
-				}, 10100);
+				// nodine: NEVER swap loader → error on a timer alone. The bundle is
+				// multi-MB static on a cold cache; a slow download is normal and
+				// must keep showing the loader (the 10s unconditional swap here was
+				// reported as scaring users off). The error only appears when the
+				// workbench entry script FAILED to load (onerror / scripts blocked).
+				(function () {
+					var el = document.getElementById('vscode-startup-fallback');
+					if (!el) { return; }
+					var sub = document.getElementById('nodine-progress-sub');
+					// capturing listener on window: fires for ANY failed script
+					// (module + classic), including entry scripts parsed AFTER
+					// this inline one (querySelector here would find nothing).
+					window.addEventListener('error', function (ev) {
+						var t = ev.target;
+						if (t && t.tagName === 'SCRIPT' && t.src && (t.src.indexOf('/out/') >= 0 || t.src.indexOf('node_modules') >= 0)) {
+							el.classList.add('reveal-error');
+						}
+					}, true);
+
+					function fmt(mb) {
+						return mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(mb * 1024) + ' KB';
+					}
+					// completed-resource byte counter (performance API reports only
+					// finished transfers — in-flight bytes are unknown, so the bar
+					// stays indeterminate and this is just a reassurance counter)
+					function pollProgress() {
+						var done = 0;
+						try {
+							var entries = performance.getEntriesByType('resource') || [];
+							for (var i = 0; i < entries.length; i++) {
+								var e = entries[i];
+								if (e.transferSize && (e.name.indexOf('/out/') >= 0 || e.name.indexOf('node_modules') >= 0 || e.name.indexOf('/nodine/') >= 0)) {
+									done += e.transferSize;
+								}
+							}
+						} catch (err) { /* older browsers */ }
+						if (sub) {
+							sub.textContent = done > 0 ? 'Downloaded ' + fmt(done / (1024 * 1024)) + ' — still loading' : 'Preparing…';
+						}
+					}
+					setInterval(pollProgress, 1000);
+				})();
 			</script>
 		</div>
 	</body>

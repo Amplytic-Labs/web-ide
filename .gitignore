@@ -1,6 +1,8 @@
 *.log
 .env
 node_modules/
+!vscode-web/node_modules/
+!vscode-web/node_modules/**
 vscode/node_modules/
 vscode/.build/
 vscode/extensions/**/dist/

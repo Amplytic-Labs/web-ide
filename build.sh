@@ -24,5 +24,6 @@ cd "$REPO_DIR"
 python3 scripts/static_fill.py                 # fill placeholders -> serverless index.html
 python3 scripts/make_nodine_icons.py           # favicon + PWA icons from assets/Nodine-logo.svg
 node scripts/stage-nodine.mjs                  # stage runtime from node_modules -> vscode-web/nodine
+node scripts/stage-sitedeps.mjs                # xterm/oniguruma/textmate the site fetches at runtime
 
 echo "done -> $REPO_DIR/vscode-web"
